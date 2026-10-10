@@ -1,0 +1,1471 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CISD Ultimate  -  Proper (v2)
+//
+//  Rewritten against the definitions in this repo:
+//    structure      concepts/01-market-structure/mss.md, choch-bullish/bearish
+//    the trigger    concepts/03-order-flow/order-flow-shift.md
+//    the sweep      concepts/02-liquidity/liquidity-sweep.md  (wick through, close back)
+//    the array      concepts/06-fair-value-gaps/fair-value-gap.md, ce-as-primary-entry.md
+//    the block      concepts/07-order-blocks/order-block-criteria.md (run framing, BOS gate)
+//    the frame      concepts/05-pd-arrays/dealing-range.md  (unbroken LTH/LTL)
+//    the clock      concepts/10-killzones/killzone-times-table.md
+//    the sequence   concepts/31-models/ict-2022-model.md  (bias → KZ → sweep → shift
+//                   with displacement → retrace into the array → SL beyond the sweep)
+//    the metric     concepts/09-displacement/displacement-strength-criteria.md (5 factors)
+//                   concepts/32-risk-management/r-multiple.md (R, breakeven = 1/(1+R))
+//
+//  What v1 got wrong and this fixes  -  see tools/cisd-audit.md for the evidence.
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("CISD Ultimate  -  Proper (v2)  -  build 2.5", "CISD v2", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 120, behind_chart = false)
+
+// ─── input group labels ─── declared up front because every input below references one
+//   by name, and a name is only visible after its declaration line.
+
+grpP     = "======= Timeframe ======="
+grpS = "======= Structure ======="
+grpD = "======= Displacement ======="
+grpZ = "======= PD arrays ======="
+grpT = "======= Time ======="
+grpH = "======= HTF bias ======="
+grpM = "======= Model ======="
+grpR = "======= Risk ======="
+grpV = "======= Visuals ======="
+grpJ = "======= Journal ======="
+
+// ─── PRESET / TIMEFRAME ────────────────────────────────────────────────────────
+// Windows that are really a DURATION are entered in minutes and converted to bars
+// from the chart timeframe, so 1m and 4H charts apply the same model instead of a
+// bar count that only means something on one of them. "Auto (chart TF)" reads
+// timeframe.in_seconds(); pick a row by hand only to pin the structure knobs.
+//   group label "======= Timeframe =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+preset   = input.string("Auto (chart TF)", "Preset", options=["Auto (chart TF)", "1min", "2min", "3min", "5min", "15min", "30min", "1H", "2H", "4H", "1D"], group=grpP, tooltip="Auto derives the structural ladder (pivot legs, displacement thresholds, min FVG size) from the chart timeframe. Every window below is in minutes and is converted on the same row.")
+
+// ─── STRUCTURE ─────────────────────────────────────────────────────────────────
+//   group label "======= Structure =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+swLenIn    = input.int(0, "Swing pivot length (0 = from preset)", minval=0, maxval=50, group=grpS, tooltip="Bars each side of a candle that must be extreme for it to be a swing. 5–15m: 10. 1m: 12. 1H+: 8. Higher = fewer, better levels.")
+swExpMin   = input.float(600, "Level expiry (minutes)", minval=10, step=10, group=grpS, tooltip="A level nobody has touched in this long is spent: it stops being a draw on liquidity. Converts to bars from the chart timeframe, floors at 12 bars so the expiry can still outlive maxKeep.")
+swMaxKeep  = input.int(24, "Levels tracked per side", minval=4, maxval=40, group=grpS, tooltip="Oldest levels are dropped (and their lines deleted) beyond this. 24 covers a session of BSL/SSL on most intraday TFs.")
+wickMin    = input.float(0.60, "Sweep: opposing wick ≥ (share of range)", minval=0.0, maxval=1.0, step=0.05, group=grpS, tooltip="liquidity-sweep: BSL_sweep := high > level AND close < level AND (high − close) > 0.6 × range.")
+needBack   = input.bool(true, "Sweep must close back inside the level", group=grpS, tooltip="Off = any touch counts, which is the v1 behaviour and also counts a break-of-structure as a sweep.")
+
+// ─── DISPLACEMENT ──────────────────────────────────────────────────────────────
+//   group label "======= Displacement =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+dispMinIn  = input.int(0, "Min displacement score (0 = from preset)", minval=0, maxval=15, group=grpD, tooltip="displacement-strength-criteria: 5–8 weak, 9–11 moderate, 12–15 strong. The gate for the model is moderate or better, so 9 on 5m, 10 on 1–3m, 8 on 1H+.")
+dispAIn    = input.int(0, "'Strong' score for an A grade (0 = from preset)", minval=0, maxval=15, group=grpD)
+dispLook   = input.int(20, "Body average length (candles, factor 3)", minval=5, group=grpD, tooltip="Deliberately in CANDLES, not minutes: factor 3 of the rubric compares a body to the average body nearby, which is a relative measure and therefore timeframe-free.")
+
+// ─── PD ARRAYS ─────────────────────────────────────────────────────────────────
+//   group label "======= PD arrays =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+fvgMinAtrIn = input.float(0.0, "Min FVG height in ATR (0 = from preset)", minval=0.0, step=0.05, group=grpZ, tooltip="Gap size that counts as a real imbalance. Scales down with the timeframe (0.30 on 1m, 0.20 on 4H) because a candle's range grows with it.")
+fvgNeedDisp = input.bool(true, "FVG needs a displacement candle", group=grpZ, tooltip="fair-value-gap criterion c3: candle n must be displacement, not any 3-candle gap. Off = v1 behaviour.")
+fvgDispMin  = input.int(8, "FVG: min score on the middle candle", minval=5, maxval=15, group=grpZ)
+entryDepth  = input.string("CE (50%)", "Entry depth in the array", options=["Near edge", "CE (50%)", "Far edge"], group=grpZ, tooltip="ce-as-primary-entry: the 2025 default is CE.")
+obRunFrame  = input.bool(true, "Frame a same-colour run as ONE block", group=grpZ, tooltip="order-block-criteria: consecutive same-colour candles are one block, not a candidate list.")
+obNeedBOS   = input.bool(true, "Block must be followed by a structure break", group=grpZ, tooltip="order-block-criteria #3: displacement that breaks a swing. Without it, it is just a candle.")
+obZoneMode  = input.string("Bodies", "Block zone", options=["Bodies", "Full range"], group=grpZ)
+obTouchMax  = input.int(1, "Touches before the block is spent", minval=1, maxval=3, group=grpZ)
+obMaxRun    = input.int(4, "Max candles in a framed run", minval=1, maxval=6, group=grpZ)
+zoneWinMin  = input.float(120, "An array stays valid for entry (minutes)", minval=10, step=10, group=grpZ, tooltip="Beyond this the gap/block is stale: ICT arrays are intra-session objects, not permanent support. Floors at 4 bars.")
+
+// ─── TIME ──────────────────────────────────────────────────────────────────────
+//   group label "======= Time =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+tzIn     = input.string("America/New_York", "Session timezone", group=grpT, tooltip="killzone-times-table common mistake: using broker/server time. Always anchor to NY. IANA names only, e.g. America/New_York, Europe/London, UTC.")
+kzSet    = input.string("Public 2022 set", "Killzone set", options=["Public 2022 set", "2017 mentorship set", "No filter"], group=grpT)
+sigLondon= input.bool(true, "London KZ 02:00–05:00", group=grpT)
+sigNyAm  = input.bool(true, "NY AM KZ 08:00–11:00", group=grpT)
+sigNyPm  = input.bool(false, "NY PM KZ 13:30–16:00", group=grpT)
+sigLc    = input.bool(false, "London close KZ 10:00–12:00", group=grpT)
+useSb    = input.bool(false, "Silver-bullet sub-window only (03–04 / 10–11)", group=grpT)
+useMacro = input.bool(false, "Macro sub-window only (20 min)", group=grpT)
+buildAsia= input.bool(true, "Build the Asian range for liquidity", group=grpT)
+
+// ─── HTF BIAS ──────────────────────────────────────────────────────────────────
+//   group label "======= HTF bias =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+htfGate  = input.string("Soft", "HTF alignment", options=["Off", "Soft", "Veto"], group=grpH, tooltip="Veto = a trade against the HTF read is rejected. Soft (default) = it is not rejected, it loses the HTF confluence point and drops a grade  -  which is the honest reading, because alignment is already 1 of the 6 score points, so making it a veto too charges you twice for the same fact. The point is always scored from the facts, only the veto is switchable.")
+htfTf    = input.timeframe("60", "HTF timeframe", group=grpH)
+htfMode  = input.string("Close vs EMA", "Bias test", options=["Close vs EMA", "Position in HTF dealing range", "Displacement of HTF structure"], group=grpH)
+htfEma   = input.int(50, "HTF EMA length", minval=5, group=grpH)
+
+// ─── MODEL / SCORING ───────────────────────────────────────────────────────────
+//   group label "======= Model =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+sweepGate = input.string("Any raid", "Chain: sweep before the shift", options=["Off", "Any raid", "Opposite raid"], group=grpM, tooltip="The 2022 model is raid → shift, and steps 3–4 are adjacent, not merely both true. Opposite raid = for a long, sell-side liquidity was taken (judas swing). Any raid is the looser and more common form on metals/indices: a BSL taken and held into a breakaway also counts, and the score does not care which. Within sweepWin bars either way.")
+needSweep = input.bool(true, "Sweep gate enabled", group=grpM, tooltip="Kept for compatibility with the earlier presets: turning this off forces the gate to Off.")
+needShift = input.bool(true, "Chain: sweep must be followed by the shift", group=grpM)
+needFrame = input.bool(true, "Chain: entry inside premium/discount frame", group=grpM)
+kzGate    = input.string("Veto", "Killzone", options=["Off", "Score only", "Veto"], group=grpM, tooltip="Veto is the ICT reading: no setups outside the selected windows. Score only keeps the time point in the grade and lets the retrace arm anyway  -  which is also how you find out whether the clock is load-bearing on your instrument: read EXP OFF in the journal afterwards.")
+riskMaxAtr = input.float(5.0, "Max risk (ATR multiples)", minval=1.0, step=0.5, group=grpR, tooltip="Distance from entry to stop, measured against ATR. A sweep 8 ATR away is not a trade with a tight stop, it is a position the size of the sweep  -  reject it. Metals and indices on a 5m chart routinely need 5–6 because the sweep is a whole session extreme.")
+sweepWinMin = input.float(60, "Sweep must precede the shift within (minutes)", minval=5, step=5, group=grpM, tooltip="ict-2022-model steps 3→4 are adjacent, not just both true. Floors at 6 bars.")
+armWinMin = input.float(90, "Setup stays armed (minutes)", minval=10, step=5, group=grpM, tooltip="How long the retrace has to arrive before the setup is voided. A 90-minute window is roughly one London/NY push.")
+minScore  = input.int(2, "Min confluence score to alert", minval=0, maxval=6, group=grpM)
+coolMin   = input.float(30, "Cooldown after a resolved setup (minutes)", minval=0, step=5, group=grpM)
+allowBoth = input.bool(false, "Allow opposite setup while one is armed", group=grpM)
+
+// ─── RISK ──────────────────────────────────────────────────────────────────────
+//   group label "======= Risk =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+slMode   = input.string("Beyond the sweep", "Stop loss", options=["Beyond the sweep", "Beyond the array", "ATR buffer"], group=grpR, tooltip="ict-2022-model step 6: SL beyond the swept extreme. ATR buffer is the v1 behaviour.")
+atrBuf   = input.float(0.35, "ATR buffer (SL)", minval=0.05, step=0.05, group=grpR)
+tpMode   = input.string("Nearest pool", "Take profit", options=["Nearest pool", "Fixed R multiple", "Both"], group=grpR, tooltip="step 7: targets via the draw on liquidity, not a flat multiple.")
+rrFixed  = input.float(2.0, "Fixed R target", minval=0.5, step=0.25, group=grpR)
+
+// ─── VISUALS ───────────────────────────────────────────────────────────────────
+//   group label "======= Visuals =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+showSwings = input.bool(true, "Draw liquidity levels", group=grpV)
+showFvg    = input.bool(true, "Draw FVGs", group=grpV)
+showOb     = input.bool(true, "Draw order blocks", group=grpV)
+showArmed  = input.bool(true, "Draw armed setups + entry/SL/TP", group=grpV)
+hideSpent  = input.bool(true, "Hide taken/mitigated levels", group=grpV, tooltip="Only reachable in Full density: below that a spent pool has no line to keep.")
+lvNearIn   = input.int(0, "Pools drawn per side (0 = from density)", minval=0, maxval=12, group=grpV, tooltip="Ranked by distance from the close: the N nearest unmitigated highs above and lows below. Everything else is real but not drawn  -  the data still drives the model.")
+lvlReach   = input.float(8, "Only pools within this many ATR (0 = no limit)", minval=0.0, step=0.5, group=grpV, tooltip="A pool 60 ATR away is not a draw on anything. In Clean this is the honest filter: it stops the top of a long uptrend from carrying every weekly high with it.")
+green      = input.color(#00ffbb, "Bullish", group=grpV)
+red        = input.color(#ff1100, "Bearish", group=grpV)
+bodyT      = input.int(90, "Candle body transparency", minval=0, maxval=100, group=grpV)
+wickT      = input.int(40, "Candle wick transparency", minval=0, maxval=100, group=grpV)
+showCandles= input.bool(true, "Repaint candles with delivery state", group=grpV)
+viz        = input.string("Clean", "Density", options=["Minimal", "Clean", "Full"], group=grpV, tooltip="One switch for how much gets drawn, independent of what the model reads. Clean: the 3 nearest pools per side (within reach), arrays only while they are live, 4-row panel, 5-row journal. Minimal: 1 pool per side, everything else as Clean. Full: every tracked pivot extended to the right edge, spent boxes kept and dimmed, the delivery line, and both tables in full  -  the v2.1 behaviour. The boxes below still only hide things, so Density never shows something you switched off.")
+showDash   = input.string("Compact", "Dashboard", options=["Off", "Compact", "Full"], group=grpV, tooltip="Compact keeps the four cells that change a decision: who is in delivery, which pool was raided and with what score, the setup and its levels, and the expectancy it produced.")
+showMarks  = input.bool(true, "Mark resolved trades on the chart", group=grpV, tooltip="One label per journal entry at its entry price, ±R in the text. Drawn on the last bar only and rebuilt in place, so the object budget stays flat however long the chart is.")
+markN      = input.int(40, "How many recent trades to mark", minval=0, maxval=200, group=grpV)
+
+// ─── JOURNAL ───────────────────────────────────────────────────────────────────
+//   group label "======= Journal =======" hoisted to the top of the file: Pine looks names up top-down, so a
+//   group variable used as an input's group= must already be declared (CE10272).
+btOn     = input.bool(true, "Keep a trade journal", group=grpJ)
+btLook   = input.int(0, "Lookback bars (0 = whole chart)", minval=0, maxval=20000, step=100, group=grpJ)
+btCost   = input.float(0.05, "Friction per trade (R)", minval=0.0, step=0.05, group=grpJ)
+btTie    = input.string("First-touch heuristic", "Same-bar TP & SL", options=["Count as loss", "Count as win", "First-touch heuristic"], group=grpJ)
+btShow   = input.string("Key", "Journal table", options=["Off", "Key", "Full"], group=grpJ, tooltip="Key = 5 rows (trades, win rate, expectancy, verdict, MFE/MAE, net/PF/DD, long/short, streaks, ambiguous, time-outs). Full adds the per-killzone, per-array-kind and R-distribution rows.")
+alertOn  = input.bool(false, "Emit alert() events with a full payload", group=grpJ, tooltip="Use with an alert whose condition is 'Any alert() function call'. alertcondition() stays available for the static conditions, this carries price, grade, score and the array type in one message.")
+alertFmt = input.string("JSON", "Payload format", options=["JSON", "Plain text"], group=grpJ)
+
+// ─── PRESET LADDER + TIMEFRAME SCALING ─────────────────────────────────────────
+int    tfSec = timeframe.in_seconds()
+int    tfRow = tfSec <= 60 ? 0 : tfSec <= 120 ? 1 : tfSec <= 180 ? 2 : tfSec <= 300 ? 3 : tfSec <= 600 ? 4 : tfSec <= 900 ? 5 : tfSec <= 1800 ? 6 : tfSec <= 3600 ? 7 : tfSec <= 7200 ? 8 : tfSec <= 14400 ? 9 : 10
+int    prRow = preset == "1min" ? 0 : preset == "2min" ? 1 : preset == "3min" ? 2 : preset == "5min" ? 3 : preset == "15min" ? 4 : preset == "30min" ? 5 : preset == "1H" ? 6 : preset == "2H" ? 7 : preset == "4H" ? 8 : preset == "1D" ? 9 : 3
+int    row   = preset == "Auto (chart TF)" ? tfRow : prRow
+string tfTxt = row == 0 ? "1min" : row == 1 ? "2min" : row == 2 ? "3min" : row == 3 ? "5min" : row == 4 ? "10min" : row == 5 ? "15min" : row == 6 ? "30min" : row == 7 ? "1H" : row == 8 ? "2H" : row == 9 ? "4H" : "1D+"
+
+// bars for a duration; never fewer than the floor, never a runaway on 1-second charts
+f_bars(float minutes, int minBars) =>
+    math.max(minBars, math.min(20000, math.round(minutes * 60.0 / tfSec)))
+
+int   swLenP   = swLenIn   > 0 ? swLenIn   : row <= 1 ? 12 : row <= 3 ? 10 : row <= 5 ? 9  : row <= 8 ? 8 : 7
+int   dispMinP = dispMinIn > 0 ? dispMinIn : row <= 2 ? 10 : row <= 5 ? 9  : 8
+int   dispAP   = dispAIn   > 0 ? dispAIn   : row <= 2 ? 12 : row <= 5 ? 11 : 10
+float fvgMinP  = fvgMinAtrIn > 0.0 ? fvgMinAtrIn : row <= 1 ? 0.30 : row <= 3 ? 0.25 : row <= 6 ? 0.22 : 0.20
+
+// The floors only exist so a window never collapses below the number of candles the
+// test itself needs (a sweep within 1 bar, an array touched over 2, an expiry that can
+// still be compared against maxKeep). Everywhere the minute value is meaningful, it wins.
+int   expiry   = f_bars(swExpMin, 12)
+int   zWin     = f_bars(zoneWinMin, 4)
+int   armWin   = f_bars(armWinMin, 2)
+int   sweepWin = f_bars(sweepWinMin, 3)
+int   cool     = f_bars(coolMin, 0)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DERIVED CONFIG, CLOCK, POOLS
+// ═══════════════════════════════════════════════════════════════════════════════
+int   swLenF  = math.max(2, swLenP)
+float atrRaw   = ta.atr(14)
+float atr       = nz(atrRaw, 0.0)
+float unit      = atr <= 0.0 ? syminfo.mintick * 10 : atr
+int   dispMin = dispMinP
+int   dispA   = dispAP
+float fvgMin  = fvgMinP * unit
+int   maxKeep = math.max(4, swMaxKeep)
+int   obRun   = obRunFrame ? obMaxRun : 1
+bool  lazyLv  = viz != "Full"          // lines are created by rank, not at the pivot
+bool  trimObj = viz != "Full"          // arrays stop drawing once they are done
+int   lvNear  = lvNearIn > 0 ? lvNearIn : viz == "Minimal" ? 1 : viz == "Clean" ? 3 : 40
+bool  showDelivLine = viz == "Full"    // the delivery plot is a full-width line
+
+nyHour = hour(time, tzIn)
+nyMin  = minute(time, tzIn)
+inLondon = nyHour >= 2 and nyHour < 5
+inNyAm   = nyHour >= 8 and nyHour < 11
+inNyPm   = (nyHour == 13 and nyMin >= 30) or (nyHour > 13 and nyHour < 16)
+inLonCl  = nyHour >= 10 and nyHour < 12
+inAsia   = nyHour >= 20
+sbLon    = nyHour >= 3 and nyHour < 4
+sbNy     = nyHour >= 10 and nyHour < 11
+maLon    = (nyHour == 2 and nyMin >= 50) or (nyHour == 3 and nyMin < 10)
+maNy     = (nyHour == 9 and nyMin >= 50) or (nyHour == 10 and nyMin < 10)
+kz2017   = kzSet == "2017 mentorship set"
+kzLive   = kz2017 ? (sigLondon and nyHour >= 1 and nyHour < 5) or (sigNyAm and nyHour >= 7 and nyHour < 10) or (sigLc and inLonCl) or (sigNyPm and inNyPm) : (sigLondon and inLondon) or (sigNyAm and inNyAm) or (sigLc and inLonCl) or (sigNyPm and inNyPm)
+inKill   = kzSet == "No filter" or kzLive
+inSub    = (not useSb and not useMacro) ? true : (useSb and (sbLon or sbNy)) or (useMacro and (maLon or maNy))
+inClock  = inKill and inSub
+
+// PDH/PDL: last completed daily bar, no look-ahead
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+var float asiaHi = 0.0
+var float asiaLo = 0.0
+var float lonHi  = 0.0
+var float lonLo  = 0.0
+var bool  asiaNew = false
+var bool  lonNew  = false
+if inAsia
+    if not asiaNew
+        asiaNew := true
+        asiaHi  := high
+        asiaLo  := low
+    else
+        asiaHi := math.max(asiaHi, high)
+        asiaLo := math.min(asiaLo, low)
+else if buildAsia
+    asiaNew := false
+if inLondon
+    if not lonNew
+        lonNew := true
+        lonHi  := high
+        lonLo  := low
+    else
+        lonHi := math.max(lonHi, high)
+        lonLo := math.min(lonLo, low)
+else
+    lonNew := false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DISPLACEMENT  -  displacement-strength-criteria. core = factors 1-4 (0..12),
+// tot adds factor 5 (follow-through) which only exists once bars have printed
+// after the candle, hence the t / t+2 two-stage below.
+// ═══════════════════════════════════════════════════════════════════════════════
+float avgBody = ta.sma(math.abs(close - open), dispLook)
+
+f_dispAt(int k, int dir) =>
+    float rng = math.max(high[k] - low[k], syminfo.mintick)
+    float bod = math.abs(close[k] - open[k])
+    float opp = dir == 1 ? high[k] - math.max(open[k], close[k]) : math.min(open[k], close[k]) - low[k]
+    float ab  = nz(avgBody[k], rng)
+    int s1 = bod / rng >= 0.85 ? 3 : bod / rng >= 0.70 ? 2 : bod / rng >= 0.50 ? 1 : 0
+    int s2 = opp / rng <= 0.10 ? 3 : opp / rng <= 0.20 ? 2 : opp / rng <= 0.30 ? 1 : 0
+    int s3 = bod >= 2.0 * ab ? 3 : bod >= 1.5 * ab ? 2 : bod >= 1.0 * ab ? 1 : 0
+    float hiK2 = nz(high[k + 2], high[k])
+    float loK2 = nz(low[k + 2], low[k])
+    bool  gap  = dir == 1 ? low[k] > hiK2 : high[k] < loK2
+    int s4 = gap ? 3 : bod > ab ? 2 : 1
+    int s5 = 0
+    if k >= 1
+        bool a = dir == 1 ? nz(close[k - 1], close[k]) > nz(open[k - 1], open[k]) : nz(close[k - 1], close[k]) < nz(open[k - 1], open[k])
+        bool b = k >= 2 ? (dir == 1 ? nz(close[k - 2], close[k]) > nz(open[k - 2], open[k]) : nz(close[k - 2], close[k]) < nz(open[k - 2], open[k])) : false
+        s5 := a and b ? 3 : a ? 2 : 0
+    [s1 + s2 + s3 + s4, s1 + s2 + s3 + s4 + s5]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIQUIDITY LEVELS  -  px / bar / side(1=BSL high, -1=SSL low) / state
+//   state 0 live, 1 swept (raided, price came back), 2 broken (closed through),
+//   3 expired.  Sweeping a level and closing through it are different events:
+//   liquidity-sweep.md  -  "a sweep wicks, BOS closes".
+// ═══════════════════════════════════════════════════════════════════════════════
+var float[] lvPx   = array.new_float()
+var int[]   lvBar  = array.new_int()
+var int[]   lvSide = array.new_int()
+var int[]   lvSt   = array.new_int()
+var line[]  lvLn   = array.new_line()
+
+// The 2-arg overload is undocumented: TradingView reads it as (leftBarCount, rightBarCount) over
+// high/low, other Pine toolchains read the first argument as `source` - a constant, which is never
+// a pivot. Name the source.
+pivHi = ta.pivothigh(high, swLenF, swLenF)
+pivLo = ta.pivotlow(low, swLenF, swLenF)
+
+f_wickOk(int side) =>
+    float rng  = math.max(high - low, syminfo.mintick)
+    float wick = side == 1 ? high - math.max(open, close) : math.min(open, close) - low
+    wickMin <= 0.0 or wick >= wickMin * rng
+
+f_spendLevel(int i, int st) =>
+    array.set(lvSt, i, st)
+    line ln = array.get(lvLn, i)
+    if not na(ln)
+        if hideSpent
+            line.delete(ln)
+            array.set(lvLn, i, na)
+        else
+            line.set_color(ln, st == 1 ? color.new(array.get(lvSide, i) == 1 ? red : green, 40) : color.new(color.gray, 60))
+            line.set_style(ln, st == 2 ? line.style_dashed : line.style_solid)
+    st
+
+if not na(pivHi)
+    array.unshift(lvPx, high[swLenF])
+    array.unshift(lvBar, bar_index - swLenF)
+    array.unshift(lvSide, 1)
+    array.unshift(lvSt, 0)
+    array.unshift(lvLn, showSwings and not lazyLv ? line.new(bar_index - swLenF, high[swLenF], bar_index, high[swLenF], color = color.new(chart.fg_color, 62), width = 1, extend = extend.right) : na)
+if not na(pivLo)
+    array.unshift(lvPx, low[swLenF])
+    array.unshift(lvBar, bar_index - swLenF)
+    array.unshift(lvSide, -1)
+    array.unshift(lvSt, 0)
+    array.unshift(lvLn, showSwings and not lazyLv ? line.new(bar_index - swLenF, low[swLenF], bar_index, low[swLenF], color = color.new(chart.fg_color, 62), width = 1, extend = extend.right) : na)
+while array.size(lvPx) > maxKeep
+    line lnX = array.pop(lvLn)
+    if not na(lnX)
+        line.delete(lnX)
+    array.pop(lvPx)
+    array.pop(lvBar)
+    array.pop(lvSide)
+    array.pop(lvSt)
+
+// These six MUST persist across bars. ict-2022-model steps 3 and 4 are ADJACENT events, not
+// simultaneous ones: liquidity is taken on one bar and structure breaks on a later bar. Declared
+// without `var` they were reset every bar, so by the time a break read `raidBar` it was -1 again,
+// gSweep could only pass when a raid and a break landed on the same bar (and the level loop spends
+// a level in exactly one of those two branches, so it effectively never did) - which is why a whole
+// timeframe of charts showed no setups and a journal with zero rows.
+var int   raidSide = 0
+var float raidPx   = 0.0
+var int   raidBar  = -1
+var int   brokeSide= 0
+var float brokePx  = 0.0
+var int   brokeBar = -1
+if array.size(lvPx) > 0
+    for i = array.size(lvPx) - 1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an empty
+        // bound still runs the body once with a negative index  -  skip it explicitly
+        if i < 0 or i >= array.size(lvPx)
+            continue
+        int st = array.get(lvSt, i)
+        if st == 0
+            if bar_index - array.get(lvBar, i) > expiry
+                f_spendLevel(i, 3)
+            else if barstate.isconfirmed
+                float px = array.get(lvPx, i)
+                int   sd = array.get(lvSide, i)
+                bool  hit = sd == 1 ? high > px : low < px
+                bool  thru = sd == 1 ? close > px : close < px
+                if hit and thru and not needBack
+                    f_spendLevel(i, 1)
+                    raidSide := sd
+                    raidPx   := px
+                    raidBar  := bar_index
+                else if hit and thru
+                    f_spendLevel(i, 2)
+                    brokeSide := sd
+                    brokePx   := px
+                    brokeBar  := bar_index
+                else if hit and f_wickOk(sd)
+                    f_spendLevel(i, 1)
+                    raidSide := sd
+                    raidPx   := px
+                    raidBar  := bar_index
+
+// session / previous-day pools are sweep candidates too (2022 model step 3)
+f_poolRaid(float px, int sd) =>
+    bool r = false
+    if px > 0.0 and barstate.isconfirmed
+        bool hit  = sd == 1 ? high > px : low < px
+        bool back = sd == 1 ? close < px : close > px
+        r := hit and (not needBack or back) and f_wickOk(sd)
+    r
+float poolHi = 0.0
+if f_poolRaid(pdh, 1)
+    poolHi := pdh
+if buildAsia and f_poolRaid(asiaHi, 1) and (poolHi == 0.0 or asiaHi < poolHi)
+    poolHi := asiaHi
+if f_poolRaid(lonHi, 1) and (poolHi == 0.0 or lonHi < poolHi)
+    poolHi := lonHi
+float poolLo = 0.0
+if f_poolRaid(pdl, -1)
+    poolLo := pdl
+if buildAsia and f_poolRaid(asiaLo, -1) and (poolLo == 0.0 or asiaLo > poolLo)
+    poolLo := asiaLo
+if f_poolRaid(lonLo, -1) and (poolLo == 0.0 or lonLo > poolLo)
+    poolLo := lonLo
+if poolHi > 0.0 and bar_index - raidBar != 0
+    raidSide := 1
+    raidPx   := poolHi
+    raidBar  := bar_index
+if poolLo > 0.0 and bar_index - raidBar != 0
+    raidSide := -1
+    raidPx   := poolLo
+    raidBar  := bar_index
+
+// ─── dealing range: the unbroken extremes, not a rolling window ───
+// ta.* must run on every bar, so the fallback is computed here, not inside the if
+float hhFallback = ta.highest(high, 240)
+float llFallback = ta.lowest(low, 240)
+float drHi = 0.0
+float drLo = 0.0
+if array.size(lvPx) > 0
+    for i = 0 to array.size(lvPx) - 1
+        // clamped: a counted for takes its direction from start vs end, so an empty
+        // bound still runs the body once with a negative index  -  skip it explicitly
+        if i < 0 or i >= array.size(lvPx)
+            continue
+        if array.get(lvSt, i) == 0
+            float px = array.get(lvPx, i)
+            if array.get(lvSide, i) == 1
+                drHi := drHi == 0.0 ? px : math.max(drHi, px)
+            else
+                drLo := drLo == 0.0 ? px : math.min(drLo, px)
+if drHi == 0.0
+    drHi := hhFallback
+if drLo == 0.0
+    drLo := llFallback
+float eq    = (drHi + drLo) / 2.0
+float rngSz = math.max(drHi - drLo, syminfo.mintick)
+bool inDiscount = close < eq
+bool inPremium  = close > eq
+// OTE 0.62–0.79 of the range measured from the far end
+bool inOte = inDiscount and (drHi - close) / rngSz >= 0.62 or inPremium and (close - drLo) / rngSz >= 0.62
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FVG STORE  -  state 0 fresh, 1 CE worked, 2 filled, 3 inverted
+// Detection uses the canonical 3-candle form with the displacement candle in the
+// middle (bar index 1 here), and the zone is [H(n-1), L(n+1)] for a bullish gap.
+// ═══════════════════════════════════════════════════════════════════════════════
+var float[] gTop = array.new_float()
+var float[] gBot = array.new_float()
+var int[]   gBar = array.new_int()
+var int[]   gDir = array.new_int()
+var int[]   gSt  = array.new_int()
+var int[]   gSc  = array.new_int()
+var box[]   gBox = array.new_box()
+var int[]   gUse = array.new_int()
+
+int   gFreshB = 0
+int   gFreshS = 0
+int   gCeN    = 0
+int   gInvN   = 0
+int   gTakenN = 0
+
+[bullCore, bullTot] = f_dispAt(1, 1)
+[bearCore, bearTot] = f_dispAt(1, -1)
+
+if barstate.isconfirmed
+    if low > high[2] and (low - high[2]) >= fvgMin and (not fvgNeedDisp or bullCore >= fvgDispMin)
+        array.unshift(gTop, low)
+        array.unshift(gBot, high[2])
+        array.unshift(gBar, bar_index - 1)
+        array.unshift(gDir, 1)
+        array.unshift(gSt, 0)
+        array.unshift(gSc, bullTot)
+        array.unshift(gUse, 0)
+        array.unshift(gBox, showFvg ? box.new(bar_index - 2, low, bar_index + 6, high[2], bgcolor = color.new(green, 88), border_color = color.new(green, 55), border_width = 1) : na)
+    if high < low[2] and (low[2] - high) >= fvgMin and (not fvgNeedDisp or bearCore >= fvgDispMin)
+        array.unshift(gTop, low[2])
+        array.unshift(gBot, high)
+        array.unshift(gBar, bar_index - 1)
+        array.unshift(gDir, -1)
+        array.unshift(gSt, 0)
+        array.unshift(gSc, bearTot)
+        array.unshift(gUse, 0)
+        array.unshift(gBox, showFvg ? box.new(bar_index - 2, low[2], bar_index + 6, high, bgcolor = color.new(red, 88), border_color = color.new(red, 55), border_width = 1) : na)
+    while array.size(gTop) > maxKeep
+        box bx0 = array.pop(gBox)
+        if not na(bx0)
+            box.delete(bx0)
+        array.pop(gTop)
+        array.pop(gBot)
+        array.pop(gBar)
+        array.pop(gDir)
+        array.pop(gSt)
+        array.pop(gSc)
+        array.pop(gUse)
+
+if array.size(gTop) > 0
+    for i = array.size(gTop) - 1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an empty
+        // bound still runs the body once with a negative index  -  skip it explicitly
+        if i < 0 or i >= array.size(gTop)
+            continue
+        float t = array.get(gTop, i)
+        float b = array.get(gBot, i)
+        int   d = array.get(gDir, i)
+        int   s = array.get(gSt, i)
+        float ce = (t + b) / 2.0
+        if barstate.isconfirmed
+            if s < 3
+                if d == 1
+                    if close < b
+                        s := 3
+                    else if low <= b
+                        s := 2
+                    else if low <= ce
+                        s := 1
+                else
+                    if close > t
+                        s := 3
+                    else if high >= t
+                        s := 2
+                    else if high >= ce
+                        s := 1
+                array.set(gSt, i, s)
+        if s == 0
+            if d == 1
+                gFreshB += 1
+            else
+                gFreshS += 1
+        else if s == 1
+            gCeN += 1
+        else if s == 3
+            gInvN += 1
+        else
+            gTakenN += 1
+        // A gap is an object with a lifespan, not a region of the chart: it tracks the
+        // right edge only while it is still fresh (or a CE the model may still enter),
+        // and it stops being drawn the bar it is spent  -  so history stays readable and
+        // the right side of the chart holds only what is actually tradable.
+        box bx = array.get(gBox, i)
+        if not na(bx)
+            bool liveG = s <= 1 and bar_index - array.get(gBar, i) <= zWin * 2
+            if liveG
+                box.set_right(bx, bar_index + 6)
+                box.set_bgcolor(bx, s == 0 ? color.new(d == 1 ? green : red, 88) : color.new(d == 1 ? green : red, 94))
+                box.set_border_color(bx, s == 0 ? color.new(d == 1 ? green : red, 55) : color.new(color.gray, 72))
+            else if trimObj
+                box.delete(bx)
+                array.set(gBox, i, na)
+            else
+                box.set_bgcolor(bx, color.new(color.gray, 96))
+                box.set_border_color(bx, color.new(color.gray, 80))
+
+// ─── order blocks: the opposite-colour run framed as ONE block ───
+var float[] oTop = array.new_float()
+var float[] oBot = array.new_float()
+var int[]   oBar = array.new_int()
+var int[]   oDir = array.new_int()
+var int[]   oCnt = array.new_int()
+var box[]   oBox = array.new_box()
+int   oFresh = 0
+
+f_frame(int dir, int from) =>
+    float bHi = math.max(nz(close[from], close), nz(open[from], open))
+    float bLo = math.min(nz(close[from], close), nz(open[from], open))
+    float wHi = nz(high[from], high)
+    float wLo = nz(low[from], low)
+    int cnt = 1
+    int k = from + 1
+    bool more = true
+    while more and cnt < obRun and k <= bar_index - 1
+        bool opp = dir == 1 ? nz(close[k], close) < nz(open[k], open) : nz(close[k], close) > nz(open[k], open)
+        if opp
+            bHi := math.max(bHi, math.max(nz(close[k], close), nz(open[k], open)))
+            bLo := math.min(bLo, math.min(nz(close[k], close), nz(open[k], open)))
+            wHi := math.max(wHi, nz(high[k], high))
+            wLo := math.min(wLo, nz(low[k], low))
+            cnt += 1
+            k += 1
+        else
+            more := false
+    [obZoneMode == "Full range" ? wHi : bHi, obZoneMode == "Full range" ? wLo : bLo, cnt]
+
+// standalone blocks: only when the structure-break gate is switched off, which is
+// the v1 behaviour  -  a block with no break behind it is a candle, not an OB
+[_, totUp0] = f_dispAt(0, 1)
+[_, totDn0] = f_dispAt(0, -1)
+// f_frame walks history with a variable offset, which makes its locals
+// self-referencing state  -  so both directions must run on every bar, not just
+// on the bars that happen to build a block
+[obHUp, obLUp, obCUp] = f_frame(1, 1)
+[obHDn, obLDn, obCDn] = f_frame(-1, 1)
+if not obNeedBOS and barstate.isconfirmed
+    if totUp0 >= 8 and close > open
+        float hA = obHUp
+        float lA = obLUp
+        int   cA = obCUp
+        if hA - lA >= 0.25 * unit and cA >= 1
+            array.unshift(oTop, hA)
+            array.unshift(oBot, lA)
+            array.unshift(oBar, bar_index - 1)
+            array.unshift(oDir, 1)
+            array.unshift(oCnt, 0)
+            array.unshift(oBox, showOb ? box.new(bar_index - 1, hA, bar_index + 6, lA, bgcolor = color.new(green, 91), border_color = color.new(green, 55), border_width = 1) : na)
+    if totDn0 >= 8 and close < open
+        float hB = obHDn
+        float lB = obLDn
+        int   cB = obCDn
+        if hB - lB >= 0.25 * unit and cB >= 1
+            array.unshift(oTop, hB)
+            array.unshift(oBot, lB)
+            array.unshift(oBar, bar_index - 1)
+            array.unshift(oDir, -1)
+            array.unshift(oCnt, 0)
+            array.unshift(oBox, showOb ? box.new(bar_index - 1, hB, bar_index + 6, lB, bgcolor = color.new(red, 91), border_color = color.new(red, 55), border_width = 1) : na)
+while array.size(oTop) > 14
+    box bxP = array.pop(oBox)
+    if not na(bxP)
+        box.delete(bxP)
+    array.pop(oTop)
+    array.pop(oBot)
+    array.pop(oBar)
+    array.pop(oDir)
+    array.pop(oCnt)
+
+// ─── HTF bias, read off the last COMPLETED HTF bar (no look-ahead) ───
+float htfCl  = request.security(syminfo.tickerid, htfTf, close[1], lookahead = barmerge.lookahead_on)
+float htfEm  = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEma)[1], lookahead = barmerge.lookahead_on)
+float htfHi  = request.security(syminfo.tickerid, htfTf, ta.highest(high, 30)[1], lookahead = barmerge.lookahead_on)
+float htfLo  = request.security(syminfo.tickerid, htfTf, ta.lowest(low, 30)[1], lookahead = barmerge.lookahead_on)
+float htfEq  = (nz(htfHi, close) + nz(htfLo, close)) / 2.0
+bool htfBull = htfMode == "Position in HTF dealing range" ? close > htfEq : htfMode == "Displacement of HTF structure" ? nz(htfCl, close) > htfEq and nz(htfCl, close) > nz(htfEm, close) : nz(htfCl, close) > nz(htfEm, close)
+bool htfBear = htfMode == "Position in HTF dealing range" ? close < htfEq : htfMode == "Displacement of HTF structure" ? nz(htfCl, close) < htfEq and nz(htfCl, close) < nz(htfEm, close) : nz(htfCl, close) < nz(htfEm, close)
+
+// ─── the draw on liquidity: nearest pool, not a fixed priority list ───
+f_poolAbove() =>
+    float r = 0.0
+    if not na(pdh) and pdh > close
+        r := pdh
+    if buildAsia and asiaHi > close and (r == 0.0 or asiaHi < r)
+        r := asiaHi
+    if lonHi > close and (r == 0.0 or lonHi < r)
+        r := lonHi
+    if array.size(lvPx) > 0
+        for i = 0 to array.size(lvPx) - 1
+            // clamped: a counted for takes its direction from start vs end, so an empty
+            // bound still runs the body once with a negative index  -  skip it explicitly
+            if i < 0 or i >= array.size(lvPx)
+                continue
+            float px = array.get(lvPx, i)
+            if array.get(lvSide, i) == 1 and array.get(lvSt, i) == 0 and px > close and (r == 0.0 or px < r)
+                r := px
+    r
+
+f_poolBelow() =>
+    float r = 0.0
+    if not na(pdl) and pdl < close
+        r := pdl
+    if buildAsia and asiaLo > 0.0 and asiaLo < close and (r == 0.0 or asiaLo > r)
+        r := asiaLo
+    if lonLo > 0.0 and lonLo < close and (r == 0.0 or lonLo > r)
+        r := lonLo
+    if array.size(lvPx) > 0
+        for i = 0 to array.size(lvPx) - 1
+            // clamped: a counted for takes its direction from start vs end, so an empty
+            // bound still runs the body once with a negative index  -  skip it explicitly
+            if i < 0 or i >= array.size(lvPx)
+                continue
+            float px = array.get(lvPx, i)
+            if array.get(lvSide, i) == -1 and array.get(lvSt, i) == 0 and px < close and (r == 0.0 or px > r)
+                r := px
+    r
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE OF DELIVERY → CONFIRM → ARM
+// ═══════════════════════════════════════════════════════════════════════════════
+var int   delivery = 0     // 1 = delivery buying, -1 = delivery selling, 0 = none
+var int   pTotV    = 0     // last displacement score, for the panel
+var int   pBar = -1
+var int   pDir = 0
+var float pLvl = 0.0
+var int   pRaidBar = -1
+var int   pRaidSide = 0
+var float pRaidPx = 0.0
+
+var int   stState = 0        // 0 idle, 2 armed, 3 running
+var int   stBar   = -1
+var int   stDir   = 0
+var float stEntry = 0.0
+var float stSl    = 0.0
+var float stTp    = 0.0
+var float stTpFix = 0.0
+var float stLvl   = 0.0
+var float stRisk  = 1.0
+var int   stScore = 0
+var string stGrade = ""
+var int    stZone  = 4          // 0 Asia, 1 London, 2 NY AM, 3 LC/NY PM, 4 off-clock
+var int    stKind  = 0          // 1 FVG, 2 iFVG, 3 OB, 0 swept level only
+var int   stFillBar = -1
+var float stMfe = 0.0
+var float stMae = 0.0
+var int   stGapIdx = -1
+var line  lnEntry = na
+var line  lnSl = na
+var line  lnTp = na
+var line  lnFix = na
+var label lblSt = na
+var box   boxZ  = na
+var int   lastDone = -1
+
+var int   armedN = 0
+var int   filledN = 0
+var int   voidN = 0
+
+bool armBearNow = false
+bool armBullNow = false
+bool fillNow = false
+bool voidNow = false
+bool winNow = false
+bool lossNow = false
+
+// f_dispAt reads the moving-average series, so both directions are scored on every
+// bar and picked below  -  a conditional call would desync the series
+[_, brkTotUp] = f_dispAt(2, 1)
+[_, brkTotDn] = f_dispAt(2, -1)
+[fbkHUp, fbkLUp, _] = f_frame(1, 3)
+[fbkHDn, fbkLDn, _] = f_frame(-1, 3)
+
+// a close through a confirmed swing is the candidate; it is only judged two bars
+// later, when follow-through (factor 5) exists
+if brokeBar == bar_index and barstate.isconfirmed and stState == 0 and bar_index - lastDone >= cool
+    pBar      := bar_index
+    pDir      := brokeSide == 1 ? 1 : -1
+    pLvl      := brokePx
+    pRaidBar  := raidBar
+    pRaidSide := raidSide
+    pRaidPx   := raidPx
+
+// The funnel: every candidate the model evaluated since the first loaded bar, and how
+// many survived each stage. Without this, a strict stack of gates and a broken indicator
+// look identical  -  both are an empty chart. It is deliberately not windowed by btLook:
+// it counts the whole load, because that is the sample the panel is drawn from.
+var int[] FN = array.new_int(14, 0)
+
+f_fnStage(int i) =>
+    i == 1 ? "displacement" : i == 2 ? "sweep" : i == 3 ? "shift order" : i == 4 ? "premium/discount" : i == 5 ? "HTF veto" : i == 6 ? "killzone veto" : i == 7 ? "reclaim" : i == 8 ? "risk" : i == 9 ? "score" : "?"
+
+// Which input to turn for the stage that kills the most candidates. The point of the funnel row is
+// to be actionable on a phone-sized chart: naming the stage without naming the knob left people
+// changing the wrong input. Stages with no knob are the model's definition, and that is said.
+f_fnKnob(int i) =>
+    i == 1 ? "dispMin" : i == 2 ? "sweepGate" : i == 5 ? "htfGate" : i == 6 ? "kzGate" : i == 7 ? "fvgNeedDisp/obNeedBOS" : i == 8 ? "riskMaxAtr" : i == 9 ? "minScore" : "definitional - no knob"
+f_blocked() =>
+    int cand = array.get(FN, 0)
+    if cand <= 0
+        "no breaks in view"
+    else
+        int worst = 1
+        int drop  = array.get(FN, 0) - array.get(FN, 1)
+        for i = 2 to 9
+            int d = array.get(FN, i - 1) - array.get(FN, i)
+            if d > drop
+                drop  := d
+                worst := i
+        array.get(FN, 10) > 0 and drop <= 0 ? "clear" : f_fnStage(worst) + " " + str.tostring(array.get(FN, worst - 1)) + " to " + str.tostring(array.get(FN, worst)) + " · " + f_fnKnob(worst)
+
+f_funnel() =>
+    string out = "breaks " + str.tostring(array.get(FN, 0))
+    for i = 1 to 9
+        out += " - " + f_fnStage(i) + " " + str.tostring(array.get(FN, i))
+    out += " - armed " + str.tostring(array.get(FN, 10)) + " - filled " + str.tostring(array.get(FN, 11)) + " - resolved " + str.tostring(array.get(FN, 12))
+    out
+
+if pBar == bar_index - 2 and barstate.isconfirmed
+    int cBar = bar_index - 2
+    array.set(FN, 0, array.get(FN, 0) + 1)
+    int pTot = pDir == 1 ? brkTotUp : brkTotDn
+    bool reclaimed = pDir == 1 ? close < pLvl : close > pLvl
+    // q* is the fact, g* is the gate. The score is always built from the facts so a grade
+    // means the same thing whatever you have switched; only the veto is configurable.
+    bool qRaid  = pRaidBar >= 0 and bar_index - pRaidBar <= sweepWin + 2
+    bool qSweep = qRaid and pRaidSide == -pDir
+    bool qHtf   = pDir == 1 ? htfBull : htfBear
+    bool qTime  = inClock
+    bool gDisp  = pTot >= dispMin
+    bool gSweep = (not needSweep) or sweepGate == "Off" ? true : (sweepGate == "Any raid" ? qRaid : qSweep)
+    bool gShift = not needShift or (pRaidBar >= 0 and pRaidBar <= pBar)
+    bool gFrame = not needFrame or (pDir == 1 ? inDiscount or inOte : inPremium or inOte)
+    bool gHtf   = htfGate == "Veto" ? qHtf : true
+    bool gTime  = kzGate == "Veto" ? qTime : true
+    bool gHold  = gDisp and gSweep and gShift and gFrame and gHtf and gTime and not reclaimed
+    float aTop = pLvl
+    float aBot = pLvl
+    int  aKind = 0
+    int  aIdx  = -1
+    if gHold
+        float bestD = -1.0
+        if array.size(gTop) > 0
+            for i = 0 to array.size(gTop) - 1
+                // clamped: a counted for takes its direction from start vs end, so an empty
+                // bound still runs the body once with a negative index  -  skip it explicitly
+                if i < 0 or i >= array.size(gTop)
+                    continue
+                int gd = array.get(gDir, i)
+                int gs = array.get(gSt, i)
+                bool okDir = (gd == pDir and gs < 2) or (gd == -pDir and gs == 3)
+                float edge = pDir == 1 ? array.get(gTop, i) : array.get(gBot, i)
+                bool okSide = pDir == 1 ? edge <= close : edge >= close
+                if okDir and okSide and array.get(gUse, i) == 0 and bar_index - array.get(gBar, i) <= zWin
+                    float dd = math.abs(close - edge)
+                    if bestD < 0.0 or dd < bestD
+                        bestD  := dd
+                        aIdx   := i
+                        aTop   := array.get(gTop, i)
+                        aBot   := array.get(gBot, i)
+                        aKind  := gd == pDir ? 1 : 2
+        if aIdx < 0 and array.size(oTop) > 0
+            float bestO = -1.0
+            for i = 0 to array.size(oTop) - 1
+                // clamped: a counted for takes its direction from start vs end, so an empty
+                // bound still runs the body once with a negative index  -  skip it explicitly
+                if i < 0 or i >= array.size(oTop)
+                    continue
+                float edgeO = pDir == 1 ? array.get(oBot, i) : array.get(oTop, i)
+                bool okO = array.get(oDir, i) == pDir and (pDir == 1 ? edgeO <= close : edgeO >= close) and array.get(oCnt, i) < obTouchMax and bar_index - array.get(oBar, i) <= zWin
+                if okO
+                    float d2 = math.abs(close - edgeO)
+                    if bestO < 0.0 or d2 < bestO
+                        bestO := d2
+                        aTop  := array.get(oTop, i)
+                        aBot  := array.get(oBot, i)
+                        aKind := 3
+        if aIdx < 0 and aKind == 0
+            float fh = pDir == 1 ? fbkHUp : fbkHDn
+            float fl = pDir == 1 ? fbkLUp : fbkLDn
+            float nearEdge = pDir == 1 ? fl : fh
+            bool obOk = fh - fl >= 0.20 * unit and (pDir == 1 ? nearEdge <= close : nearEdge >= close)
+            if obOk
+                aTop := fh
+                aBot := fl
+                aKind := 3
+                array.unshift(oTop, fh)
+                array.unshift(oBot, fl)
+                array.unshift(oBar, bar_index - 3)
+                array.unshift(oDir, pDir)
+                array.unshift(oCnt, 0)
+                array.unshift(oBox, showOb ? box.new(bar_index - 3, fh, bar_index + 6, fl, bgcolor = color.new(pDir == 1 ? green : red, 91), border_color = color.new(pDir == 1 ? green : red, 40), border_width = 1) : na)
+    float buf = atrBuf * unit
+    float ep = entryDepth == "Near edge" ? (pDir == 1 ? aTop : aBot) : entryDepth == "Far edge" ? (pDir == 1 ? aBot : aTop) : (aTop + aBot) / 2.0
+    float farEdge = pDir == 1 ? aBot : aTop
+    float slp = slMode == "Beyond the sweep" and pRaidPx > 0.0 ? pRaidPx - pDir * buf : slMode == "Beyond the array" and aKind > 0 ? farEdge - pDir * buf : (pDir == 1 ? nz(low[2], low) : nz(high[2], high)) - pDir * buf
+    float risk = (ep - slp) * pDir
+    float pool = pDir == 1 ? f_poolAbove() : f_poolBelow()
+    float tgp = tpMode == "Fixed R multiple" or pool <= 0.0 ? ep + pDir * risk * rrFixed : pool
+    if tpMode != "Fixed R multiple" and (tgp - ep) * pDir < risk
+        tgp := ep + pDir * risk * rrFixed
+    int sc = (qRaid ? 1 : 0) + (pTot >= dispA ? 1 : 0) + (gFrame ? 1 : 0) + (qHtf ? 1 : 0) + (aKind > 0 ? 1 : 0) + (qTime ? 1 : 0)
+    // Funnel accounting: FN[i] counts candidates that cleared every stage up to i, so a
+    // stage's number is always <= the one before it and the biggest drop is the binding
+    // constraint. Walking the stages is both correct and shorter than nine and-chains.
+    array<bool> stg = array.from(true, gDisp, gSweep, gShift, gFrame, gHtf, gTime, not reclaimed, risk >= syminfo.mintick * 2 and risk <= riskMaxAtr * unit, sc >= minScore)
+    int j = 0
+    while j < 10 and array.get(stg, j)
+        array.set(FN, j, array.get(FN, j) + 1)
+        j += 1
+    bool go = gHold and risk >= syminfo.mintick * 2 and risk <= riskMaxAtr * unit and sc >= minScore
+    pBar := -1
+    pTotV := pTot
+    if gDisp and not reclaimed
+        delivery := pDir
+    if go and (allowBoth or stState == 0)
+        stState := 2
+        stBar   := bar_index
+        stDir   := pDir
+        stEntry := ep
+        stSl    := slp
+        stTp    := tgp
+        stTpFix := ep + pDir * risk * rrFixed
+        stLvl   := pLvl
+        stRisk  := risk
+        stScore := sc
+        stGrade := sc >= 5 ? "A+" : sc >= 4 ? "A" : sc >= 3 ? "B" : "C"
+        array.set(FN, 10, array.get(FN, 10) + 1)
+        stZone  := not inClock ? 4 : inAsia ? 0 : inLondon ? 1 : inNyAm ? 2 : 3
+        stKind  := aKind
+        stFillBar := -1
+        stMfe := 0.0
+        stMae := 0.0
+        stGapIdx := aIdx
+        armedN += 1
+        if not na(lnEntry)
+            line.delete(lnEntry)
+        if not na(lnSl)
+            line.delete(lnSl)
+        if not na(lnTp)
+            line.delete(lnTp)
+        if not na(lnFix)
+            line.delete(lnFix)
+        if not na(boxZ)
+            box.delete(boxZ)
+        if not na(lblSt)
+            label.delete(lblSt)
+        lnEntry := na
+        lnSl    := na
+        lnTp    := na
+        lnFix   := na
+        boxZ    := na
+        if showArmed
+            lnEntry := line.new(bar_index, ep, bar_index + 3, ep, color = color.new(color.white, 30), width = 1, style = line.style_dotted, extend = extend.right)
+            lnSl    := line.new(bar_index, slp, bar_index + 3, slp, color = color.new(red, 15), width = 1, extend = extend.right)
+            lnTp    := line.new(bar_index, tgp, bar_index + 3, tgp, color = color.new(green, 15), width = 1, extend = extend.right)
+            lnFix   := tpMode == "Both" ? line.new(bar_index, stTpFix, bar_index + 3, stTpFix, color = color.new(color.gray, 55), width = 1, style = line.style_dashed, extend = extend.right) : na
+            lblSt := na
+            lblSt := label.new(cBar, pDir == 1 ? low[2] : high[2], "ARM " + stGrade + " - " + str.tostring(sc) + "/6 - " + (aKind == 1 ? "FVG" : aKind == 2 ? "iFVG" : aKind == 3 ? "OB" : "level") + (pDir == 1 ? " ▲" : " ▼"), style = pDir == 1 ? label.style_label_up : label.style_label_down, color = color.new(pDir == 1 ? green : red, 20), textcolor = color.white, size = size.small)
+        if aIdx >= 0 and array.size(gUse) > aIdx
+            array.set(gUse, aIdx, 1)
+        if pDir == -1
+            armBearNow := true
+        else
+            armBullNow := true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ORDER-BLOCK LIFE  -  touched, spent, or invalidated
+// ═══════════════════════════════════════════════════════════════════════════════
+if array.size(oTop) > 0
+    for i = array.size(oTop) - 1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an empty
+        // bound still runs the body once with a negative index  -  skip it explicitly
+        if i < 0 or i >= array.size(oTop)
+            continue
+        float t = array.get(oTop, i)
+        float b = array.get(oBot, i)
+        int   d = array.get(oDir, i)
+        int   c = array.get(oCnt, i)
+        if barstate.isconfirmed and c < 90
+            bool inNow = d == 1 ? low <= t and close > b : high >= b and close < t
+            bool lost  = d == 1 ? close < b : close > t
+            if lost
+                c := 99
+            else if inNow
+                c += 1
+            array.set(oCnt, i, c)
+            if c >= obTouchMax or c == 99
+                box bx1 = array.get(oBox, i)
+                if not na(bx1) and hideSpent
+                    box.delete(bx1)
+                    array.set(oBox, i, na)
+        box bx = array.get(oBox, i)
+        if not na(bx)
+            bool liveO = bar_index - array.get(oBar, i) <= zWin * 2 and (c == 0 or (viz == "Full" and c < 99))
+            if liveO
+                box.set_right(bx, bar_index + 6)
+                box.set_bgcolor(bx, c == 0 ? color.new(d == 1 ? green : red, 91) : color.new(d == 1 ? green : red, 96))
+            else if trimObj
+                box.delete(bx)
+                array.set(oBox, i, na)
+            else
+                box.set_bgcolor(bx, color.new(color.gray, 96))
+        if c == 0 and bar_index - array.get(oBar, i) <= zWin
+            oFresh += 1
+    while array.size(oTop) > 14
+        box bx0 = array.pop(oBox)
+        if not na(bx0)
+            box.delete(bx0)
+        array.pop(oTop)
+        array.pop(oBot)
+        array.pop(oBar)
+        array.pop(oDir)
+        array.pop(oCnt)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ARMED → FILLED → RESOLVED, and the journal
+// ═══════════════════════════════════════════════════════════════════════════════
+var float[] jr   = array.new_float()
+var float[] jgr  = array.new_float()
+var int[]   jbar = array.new_int()
+var int[]   jhold= array.new_int()
+var int[]   jamb = array.new_int()
+var int[]   jts  = array.new_int()
+var int[]   jsc  = array.new_int()
+var int[]   jdir = array.new_int()
+var float[] jmfe = array.new_float()
+var float[] jmae = array.new_float()
+var int[]   jzone= array.new_int()
+var int[]   jkind= array.new_int()
+var float[] jent = array.new_float()
+var label[] mLbl = array.new_label()
+bool wipeNow = false
+int  maxHold = armWin * 4
+
+f_jrec(float res, float gross, int hold, int amb, int ts, int sc, int dir, float mfe, float mae, int zn, int kd) =>
+    array.set(FN, 12, array.get(FN, 12) + 1)
+    array.push(jr, res - btCost)
+    array.push(jgr, gross)
+    array.push(jbar, bar_index)
+    array.push(jhold, hold)
+    array.push(jamb, amb)
+    array.push(jts, ts)
+    array.push(jsc, sc)
+    array.push(jdir, dir)
+    array.push(jmfe, mfe)
+    array.push(jmae, mae)
+    array.push(jzone, zn)
+    array.push(jkind, kd)
+    array.push(jent, stEntry)
+
+if stState == 2 and barstate.isconfirmed
+    bool touch = stDir == 1 ? low <= stEntry : high >= stEntry
+    bool gone  = stDir == 1 ? low  <= stSl   : high >= stSl
+    bool gaveup = stDir == 1 ? close < stSl : close > stSl
+    if gone or gaveup or bar_index - stBar >= armWin
+        voidNow := true
+        voidN   += 1
+        stState := 0
+        lastDone := bar_index
+        wipeNow := true
+        if not na(lblSt)
+            label.set_text(lblSt, "VOID")
+            label.set_color(lblSt, color.new(color.gray, 60))
+            label.set_style(lblSt, label.style_none)
+    else if touch
+        stState := 3
+        stFillBar := bar_index
+        fillNow := true
+        filledN += 1
+        array.set(FN, 11, array.get(FN, 11) + 1)
+        if not na(lblSt)
+            label.set_text(lblSt, "FILL " + stGrade + " " + (stDir == 1 ? "▲" : "▼"))
+        if stDir == 1 ? high >= stTp : low <= stTp
+            float g0 = (stTp - stEntry) * stDir / stRisk
+            f_jrec(g0, g0, 0, 0, 0, stScore, stDir, g0, 0.0, stZone, stKind)
+            winNow := true
+            stState := 0
+            lastDone := bar_index
+            wipeNow := true
+            if not na(lblSt)
+                label.set_text(lblSt, "TP " + str.tostring(g0, "#.##") + "R")
+
+if stState == 3 and barstate.isconfirmed
+    float mfeNow = (stDir == 1 ? high - stEntry : stEntry - low) / stRisk
+    float maeNow = (stDir == 1 ? low - stEntry : stEntry - high) / stRisk
+    stMfe := math.max(stMfe, mfeNow)
+    stMae := math.min(stMae, maeNow)
+    bool tpHit = stDir == 1 ? high >= stTp : low <= stTp
+    bool slHit = stDir == 1 ? low <= stSl : high >= stSl
+    bool timedOut = bar_index - stFillBar >= maxHold
+    float gRes = tpHit ? (stTp - stEntry) * stDir / stRisk : -1.0
+    int   aRes = 0
+    if tpHit and slHit
+        bool tpFirst = false
+        if btTie == "Count as win"
+            tpFirst := true
+        else if btTie == "Count as loss"
+            tpFirst := false
+        else
+            float oo = open
+            float dtp = math.abs(stTp - oo)
+            float dsl = math.abs(stSl - oo)
+            tpFirst := dtp / math.max(math.abs(high - oo), syminfo.mintick) < dsl / math.max(math.abs(oo - low), syminfo.mintick)
+        aRes := 1
+        gRes := tpFirst ? (stTp - stEntry) * stDir / stRisk : -1.0
+        tpHit := tpFirst
+        slHit := not tpFirst
+    if slHit or tpHit
+        float rr = tpHit ? gRes : -1.0
+        f_jrec(rr, gRes, bar_index - stFillBar, aRes, 0, stScore, stDir, stMfe, stMae, stZone, stKind)
+        if tpHit
+            winNow := true
+        else
+            lossNow := true
+        stState := 0
+        lastDone := bar_index
+        wipeNow := true
+        if not na(lblSt)
+            label.set_text(lblSt, (tpHit ? "TP " : "SL ") + str.tostring(rr, "#.##") + "R")
+    else if timedOut
+        float rr = (close - stEntry) * stDir / stRisk
+        f_jrec(rr, rr, bar_index - stFillBar, 0, 1, stScore, stDir, stMfe, stMae, stZone, stKind)
+        stState := 0
+        lastDone := bar_index
+        wipeNow := true
+        if not na(lblSt)
+            label.set_text(lblSt, "T/S " + str.tostring(rr, "#.##") + "R")
+    else
+        if not na(lblSt)
+            label.set_text(lblSt, "RUN " + str.tostring((close - stEntry) * stDir / stRisk, "#.##") + "R")
+
+while array.size(jr) > 3000
+    array.shift(jr)
+    array.shift(jgr)
+    array.shift(jbar)
+    array.shift(jhold)
+    array.shift(jamb)
+    array.shift(jts)
+    array.shift(jsc)
+    array.shift(jdir)
+    array.shift(jmfe)
+    array.shift(jmae)
+    array.shift(jzone)
+    array.shift(jkind)
+    array.shift(jent)
+
+if wipeNow
+    if not na(lnEntry)
+        line.delete(lnEntry)
+    if not na(lnSl)
+        line.delete(lnSl)
+    if not na(lnTp)
+        line.delete(lnTp)
+    if not na(lnFix)
+        line.delete(lnFix)
+    if not na(boxZ)
+        box.delete(boxZ)
+    lnEntry := na
+    lnSl := na
+    lnTp := na
+    lnFix := na
+    boxZ := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// JOURNAL STATS
+// ═══════════════════════════════════════════════════════════════════════════════
+var int[]   J = array.new_int(20, 0)
+var float[] K = array.new_float(12, 0.0)
+// per-bucket expectancy: zones 0-4, array kinds 0-3, R histogram 0..5
+var int[]   Zc = array.new_int(5, 0)
+var float[] Zn = array.new_float(5, 0.0)
+var int[]   Qc = array.new_int(4, 0)
+var float[] Qn = array.new_float(4, 0.0)
+var int[]   Rb = array.new_int(6, 0)
+
+f_pc(float num, float den) =>
+    den > 0.0 ? str.tostring(100.0 * num / den, "#.#") + "%" : " - "
+f_r(float x) =>
+    (x >= 0.0 ? "+" : "") + str.tostring(x, "#.##") + "R"
+
+// Wilson lower bound on the win rate, z=1.96. 8W/4L is not "67%"  -  the honest read of
+// 12 trades is the BOTTOM of the interval, which sits near 34%. Concepts in this repo
+// (r-multiple.md) set break-even at 1/(1+R); a sample this small cannot clear it.
+f_wilsonLo(float wins, float n) =>
+    float ph = n > 0.0 ? wins / n : 0.0
+    float nn = math.max(1.0, n)
+    float ctr = ph + 1.9208 / nn
+    float sprd = 1.96 * math.sqrt(ph * (1.0 - ph) / nn + 0.9604 / (nn * nn))
+    100.0 * (ctr - sprd) / (1.0 + 3.8416 / nn)
+
+f_bucket(array<int> c, array<float> sr, int k) =>
+    array.get(c, k) > 0 ? f_r(array.get(sr, k) / array.get(c, k)) + " n" + str.tostring(array.get(c, k)) : " - "
+
+f_bucketClr(array<int> c, array<float> sr, int k) =>
+    array.get(c, k) > 0 ? (array.get(sr, k) > 0.0 ? green : red) : color.gray
+
+f_hist(array<int> b) =>
+    int mx = 1
+    for k = 0 to 5
+        if array.get(b, k) > mx
+            mx := array.get(b, k)
+    string out = ""
+    for k = 0 to 5
+        int c = array.get(b, k)
+        int lv = c <= 0 ? 0 : math.min(7, math.round(1.0 * c * 7 / mx))
+        out += lv == 0 ? "·" : lv == 1 ? "▁" : lv == 2 ? "▂" : lv == 3 ? "▃" : lv == 4 ? "▄" : lv == 5 ? "▅" : lv == 6 ? "▆" : "█"
+    out
+
+if btOn and barstate.islast
+    int m = array.size(jr)
+    Zc.fill(0)
+    Zn.fill(0)
+    Qc.fill(0)
+    Qn.fill(0)
+    Rb.fill(0)
+    int firstIdx = 0
+    if btLook > 0 and m > 0
+        for i = m - 1 to 0
+            // clamped: a counted for takes its direction from start vs end, so an empty
+            // bound still runs the body once with a negative index  -  skip it explicitly
+            if i < 0 or i >= m
+                continue
+            if bar_index - array.get(jbar, i) > btLook
+                firstIdx := i + 1
+                break
+    int n = 0
+    int w = 0
+    int amb = 0
+    int tst = 0
+    int holdS = 0
+    int s4n = 0
+    int s4w = 0
+    int ln = 0
+    int lw = 0
+    int sn = 0
+    int sw = 0
+    int mw = 0
+    int ml = 0
+    int stk = 0
+    float sumN = 0.0
+    float sumQ = 0.0
+    float gw = 0.0
+    float gl = 0.0
+    float cum = 0.0
+    float pk = 0.0
+    float dd = 0.0
+    float hi = 0.0
+    float lo = 0.0
+    float mfeS = 0.0
+    float maeS = 0.0
+    for i = firstIdx to m - 1
+        // A counted `for` takes its direction from start vs end, so when the journal is
+        // empty this runs i = 0 then i = -1, and when every trade is older than btLook it
+        // runs i = m then i = m - 1: four reads, two of them out of bounds either way.
+        // Clamp to the intended ascending range instead of trusting the loop bounds.
+        if i < firstIdx or i >= m
+            continue
+        float v = array.get(jr, i)
+        int zc = array.get(jzone, i)
+        int kd = array.get(jkind, i)
+        if zc >= 0 and zc <= 4
+            array.set(Zc, zc, array.get(Zc, zc) + 1)
+            array.set(Zn, zc, array.get(Zn, zc) + v)
+        if kd >= 0 and kd <= 3
+            array.set(Qc, kd, array.get(Qc, kd) + 1)
+            array.set(Qn, kd, array.get(Qn, kd) + v)
+        int bkt = v < -2.0 ? 0 : v < -1.0 ? 1 : v < 0.0 ? 2 : v < 1.0 ? 3 : v < 2.0 ? 4 : 5
+        array.set(Rb, bkt, array.get(Rb, bkt) + 1)
+        n += 1
+        sumN += v
+        sumQ += v * v
+        cum += v
+        pk := math.max(pk, cum)
+        dd := math.max(dd, pk - cum)
+        if n == 1
+            hi := v
+            lo := v
+        else
+            hi := math.max(hi, v)
+            lo := math.min(lo, v)
+        gw += math.max(v, 0.0)
+        gl += math.abs(math.min(v, 0.0))
+        holdS += array.get(jhold, i)
+        amb += array.get(jamb, i)
+        tst += array.get(jts, i)
+        mfeS += array.get(jmfe, i)
+        maeS += array.get(jmae, i)
+        int scv = array.get(jsc, i)
+        bool isW = v > 0.0
+        if isW
+            w += 1
+            stk := stk > 0 ? stk + 1 : 1
+            mw := math.max(mw, stk)
+        else
+            stk := stk < 0 ? stk - 1 : -1
+            ml := math.max(ml, -stk)
+        if scv >= 4
+            s4n += 1
+            if isW
+                s4w += 1
+        if array.get(jdir, i) == 1
+            ln += 1
+            if isW
+                lw += 1
+        else
+            sn += 1
+            if isW
+                sw += 1
+    array.set(J, 0, n)
+    array.set(J, 1, w)
+    array.set(J, 2, amb)
+    array.set(J, 3, tst)
+    array.set(J, 4, mw)
+    array.set(J, 5, ml)
+    array.set(J, 6, s4n)
+    array.set(J, 7, s4w)
+    array.set(J, 8, holdS)
+    array.set(J, 9, ln)
+    array.set(J, 10, lw)
+    array.set(J, 11, sn)
+    array.set(J, 12, sw)
+    array.set(J, 13, armedN)
+    array.set(J, 14, filledN)
+    array.set(J, 15, voidN)
+    array.set(J, 16, stState)
+    array.set(J, 17, stScore)
+    array.set(K, 0, sumN)
+    array.set(K, 1, sumQ)
+    array.set(K, 2, dd)
+    array.set(K, 3, gw)
+    array.set(K, 4, gl)
+    array.set(K, 5, hi)
+    array.set(K, 6, lo)
+    array.set(K, 7, mfeS)
+    array.set(K, 8, maeS)
+    array.set(K, 9, n > 0 ? sumN / n : 0.0)
+    array.set(K, 10, n > 1 ? math.sqrt(math.max(sumQ / n - (sumN / n) * (sumN / n), 0.0)) : 0.0)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PANELS
+// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// POOL VISIBILITY  -  what the chart draws is a function of rank, not of history
+// ═══════════════════════════════════════════════════════════════════════════════
+// Every pivot is kept, because the model reads all of them; the chart shows only the
+// few that price is currently drawn toward. A line is created for the N nearest
+// unmitigated highs above the close and lows below it, and deleted when it falls out
+// of that set  -  so the chart holds 2·N level lines at most, whatever the timeframe and
+// however long the history, instead of one per pivot ever printed.
+if showSwings and lazyLv and array.size(lvPx) > 0
+    int   lsz = array.size(lvPx)
+    float upThr = -1e30
+    float dnThr =  1e30
+    float loSel = close
+    float hiSel = close
+    for k = 0 to lvNear - 1
+        float bu = na
+        float bd = na
+        for i = 0 to lsz - 1
+            if i < 0 or i >= lsz
+                continue
+            if array.get(lvSt, i) != 0
+                continue
+            float px = array.get(lvPx, i)
+            if array.get(lvSide, i) == 1
+                if px > loSel and (na(bu) or px < bu)
+                    bu := px
+            else if px < hiSel and (na(bd) or px > bd)
+                bd := px
+        loSel := na(bu) ?  1e30 : bu
+        hiSel := na(bd) ? -1e30 : bd
+        if not na(bu)
+            upThr := bu
+        if not na(bd)
+            dnThr := bd
+    for i = 0 to lsz - 1
+        if i < 0 or i >= lsz
+            continue
+        line ln = array.get(lvLn, i)
+        bool vis = false
+        if array.get(lvSt, i) == 0
+            float px2 = array.get(lvPx, i)
+            bool reach = lvlReach <= 0.0 or math.abs(px2 - close) <= lvlReach * unit
+            vis := reach and (array.get(lvSide, i) == 1 ? px2 > close and px2 <= upThr : px2 < close and px2 >= dnThr)
+        if vis
+            if na(ln)
+                ln := line.new(array.get(lvBar, i), array.get(lvPx, i), bar_index, array.get(lvPx, i), color = color.new(array.get(lvSide, i) == 1 ? red : green, 25), width = 2, extend = extend.none)
+                array.set(lvLn, i, ln)
+            else
+                line.set_x2(ln, bar_index)
+                line.set_color(ln, color.new(array.get(lvSide, i) == 1 ? red : green, 25))
+        else if not na(ln)
+            line.delete(ln)
+            array.set(lvLn, i, na)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PANELS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Two rules that the first version broke: a cell paints its own background (so a row
+// the density mode skipped is invisible rather than an empty band inside a 13-row
+// frame), and text is never given transparency  -  only backgrounds are. Translucent
+// value colours on a dark panel are why the old table read as mud.
+color txW = #eceff1
+color txD = #8296a6
+color txG = #00e676
+color txR = #ff5252
+color txA = #ffca28
+color panBg = color.new(#0d0d0d, 6)
+
+f_jcell(table t, int col, int row, string lbl, string val, color c, string tip) =>
+    table.cell(t, col, row, lbl, text_color = txD, text_size = size.tiny, text_halign = text.align_right, bgcolor = panBg)
+    table.cell(t, col + 1, row, val, text_color = c, text_size = size.tiny, text_halign = text.align_left, tooltip = tip, bgcolor = panBg)
+
+f_jrow2(table t, int row, string l1, string v1, color c1, string p1, string l2, string v2, color c2, string p2) =>
+    f_jcell(t, 0, row, l1, v1, c1, p1)
+    f_jcell(t, 2, row, l2, v2, c2, p2)
+    row + 1
+
+f_jrow3(table t, int row, string l1, string v1, color c1, string p1, string l2, string v2, color c2, string p2, string l3, string v3, color c3, string p3) =>
+    f_jcell(t, 0, row, l1, v1, c1, p1)
+    f_jcell(t, 2, row, l2, v2, c2, p2)
+    f_jcell(t, 4, row, l3, v3, c3, p3)
+    row + 1
+
+f_deliv(int d) =>
+    d == 1 ? "BUYING" : d == -1 ? "SELLING" : "flat"
+
+if showDash != "Off" and barstate.isconfirmed
+    bool  dFull = showDash == "Full"
+    int   jn    = array.get(J, 0)
+    string kzTxt = not inClock ? "out of hours" : kzSet == "2017 mentorship set" ? "2017 set" : "public set"
+    string setupTxt = stState == 3 ? (stDir == 1 ? "running long" : "running short") : stState == 2 ? (stDir == 1 ? "armed long" : "armed short") : pBar >= 0 ? "confirming" : " - "
+    var table dash = table.new(position.top_right, 4, 9, bgcolor = color.new(color.gray, 100), border_width = 0, frame_width = 0)
+    int dr = 0
+    dr := f_jrow2(dash, dr, "DELIVERY", f_deliv(delivery), delivery == 1 ? txG : delivery == -1 ? txR : txW, "order-flow-shift: flips on a confirmed close through a swing with displacement, not on a candle colour.", "CLOCK", kzTxt, inClock ? txG : txD, "killzone-times-table, anchored to " + tzIn + ".")
+    dr := f_jrow2(dash, dr, "RAID", raidBar < 0 or bar_index - raidBar > sweepWin + 2 ? "none" : (raidSide == 1 ? "BSL" : "SSL") + " " + str.tostring(bar_index - raidBar) + "b", raidBar < 0 ? txD : raidSide == 1 ? txR : txG, "wick through a pool, close back inside, wick ≥ " + str.tostring(wickMin * 100, "#") + "% of range.", "SCORE", stState == 0 ? " - " : str.tostring(stScore) + "/6 " + stGrade, stScore >= 4 ? txG : stScore >= 3 ? txA : txR, "sweep - displacement - frame - HTF - array - time")
+    dr := f_jrow2(dash, dr, "SETUP", setupTxt, stState == 0 ? txD : txW, "armed = waiting for the retrace into the array, it is not a fill.", "ENTRY / SL / TP", stState == 0 ? " - " : str.tostring(stEntry, format.mintick) + " - " + str.tostring(stSl, format.mintick) + " - " + str.tostring(stTp, format.mintick), txW, "entry at " + entryDepth + " - SL " + slMode + " - TP " + tpMode)
+    dr := f_jrow2(dash, dr, "BLOCKED BY", array.get(FN, 0) <= 0 ? " - " : array.get(FN, 10) > 0 ? "arming ✓" : f_blocked(), txA, "the funnel since the first loaded bar: " + f_funnel() + ". Actionable by design: the left cell names the stage where the most candidates die AND the input that loosens it, so an empty chart is a setting to change rather than a mystery.", "FUNNEL", str.tostring(array.get(FN, 0)) + " → " + str.tostring(array.get(FN, 10)) + " → " + str.tostring(array.get(FN, 11)), array.get(FN, 10) > 0 ? txG : txW, "candidates → armed → filled since bar 1. 0 = the model never saw a break, which is a timeframe or bar-count question, not a gate question. A big first number with nothing after it = a gate is rejecting, and the left cell names which.")
+    if dFull
+        dr := f_jrow2(dash, dr, "SHIFT", brokeBar < 0 ? "none" : (brokeSide == 1 ? "up" : "down") + " " + str.tostring(bar_index - brokeBar) + "b", txW, "last structural break (close through a confirmed swing).", "HTF " + htfTf, htfBull ? "bullish" : htfBear ? "bearish" : " - ", htfBull ? txG : htfBear ? txR : txD, "read off the last completed HTF bar  -  no look-ahead.")
+        dr := f_jrow2(dash, dr, "FRAME", inDiscount ? "discount" + (inOte ? " +OTE" : "") : inPremium ? "premium" + (inOte ? " +OTE" : "") : "at EQ", inDiscount ? txG : inPremium ? txR : txD, "dealing range = unbroken swing extremes, not a rolling window.", "RANGE", str.tostring(drLo, format.mintick) + " → " + str.tostring(drHi, format.mintick), txD, "EQ " + str.tostring(eq, format.mintick))
+        dr := f_jrow2(dash, dr, "FVG", str.tostring(gFreshB) + "B / " + str.tostring(gFreshS) + "S fresh", txW, "fresh = untouched, displacement-qualified gaps only.", "CE / INV / FILLED", str.tostring(gCeN) + " / " + str.tostring(gInvN) + " / " + str.tostring(gTakenN), txD, "states per fair-value-gap, iFVG = closed through the far edge.")
+        dr := f_jrow2(dash, dr, "BLOCKS", str.tostring(oFresh) + " fresh", txW, "framed only behind a displacement that broke structure.", "DISPLACEMENT", str.tostring(pTotV) + "/15 " + (pTotV >= dispA ? "strong" : pTotV >= 9 ? "moderate" : "weak"), pTotV >= dispA ? txG : pTotV >= 9 ? txA : txD, "5-factor score, displacement-strength-criteria.")
+        dr := f_jrow2(dash, dr, "ARM→FILL", str.tostring(armedN) + " → " + str.tostring(filledN), txW, "how many armed setups ever traded into the array, a low rate means the entry depth is too passive.", "VOID", str.tostring(voidN), txA, "armed setups that died before filling or were stopped at the sweep.")
+        dr := f_jrow2(dash, dr, "JOURNAL", jn > 0 ? str.tostring(jn) + " trades" : "none", txW, "lookback " + str.tostring(btLook) + " bars - cost " + str.tostring(btCost, "#.##") + "R", "EXPECT", jn > 0 ? f_r(array.get(K, 9)) : " - ", jn > 0 ? (array.get(K, 9) > 0.0 ? txG : txR) : txD, "average net R per trade. This is the number.")
+    else
+        dr := f_jrow2(dash, dr, "HTF " + htfTf, htfBull ? "bullish" : htfBear ? "bearish" : " - ", htfBull ? txG : htfBear ? txR : txD, "read off the last completed HTF bar  -  no look-ahead.", "EXPECT", jn > 0 ? f_r(array.get(K, 9)) : " - ", jn > 0 ? (array.get(K, 9) > 0.0 ? txG : txR) : txD, "average net R per trade - " + str.tostring(jn) + " trades - full panel in Density → Full.")
+    if stState == 2 and showArmed and not na(lblSt)
+        label.set_text(lblSt, "ARM " + stGrade + " " + str.tostring(stScore) + "/6 " + (stDir == 1 ? "▲" : "▼") + " - wait " + str.tostring(armWin - (bar_index - stBar)) + "b")
+
+if btOn and btShow != "Off" and barstate.isconfirmed
+    int   n_t = array.get(J, 0)
+    int   w_t = array.get(J, 1)
+    bool  has = n_t > 0
+    int   l_n = n_t - w_t
+    float exp = array.get(K, 9)
+    float beW2 = 100.0 / (1.0 + rrFixed)
+    float pfG = array.get(K, 4) > 0.0 ? array.get(K, 3) / array.get(K, 4) : 0.0
+    bool  jFull = btShow == "Full"
+    float wlo = f_wilsonLo(1.0 * w_t, 1.0 * n_t)
+    string mta = "cost " + str.tostring(btCost, "#.##") + "R/trade - same-bar TP&SL → " + btTie + " - entry " + entryDepth + " - SL " + slMode + " - TP " + tpMode + " - max hold " + str.tostring(armWin * 4) + "b"
+    var table jt = table.new(position.bottom_left, 6, 12, bgcolor = color.new(color.gray, 100), border_width = 0, frame_width = 0)
+    int jrow = 0
+    jrow := f_jrow3(jt, jrow, "TRADES", str.tostring(n_t), txW, mta, "WIN RATE", f_pc(w_t, n_t), has ? (100.0 * w_t / n_t > beW2 ? txG : txR) : txD, "needed to break even at 1:" + str.tostring(rrFixed, "#.#") + " = " + str.tostring(beW2, "#.#") + "%", "EXPECTANCY", has ? f_r(exp) : " - ", has ? (exp > 0.0 ? txG : txR) : txD, "net R per trade after cost. Standard error ≈ stdev/√n  -  divide one by the other before you believe this.")
+    jrow := f_jrow3(jt, jrow, "VERDICT", n_t < 30 ? "n too small" : wlo > beW2 ? "edge holds" : wlo > 0.0 ? "not proven" : "negative", n_t < 30 ? txA : wlo > beW2 ? txG : txA, "Wilson 95% LOWER bound on the win rate vs break-even: small samples flatter, this cell is what decides.", "AVG MFE", has ? f_r(array.get(K, 7) / n_t) : " - ", txW, "average maximum favourable excursion. Much larger than your target? The target is cutting the tail.", "AVG MAE", has ? f_r(array.get(K, 8) / n_t) : " - ", txW, "average maximum adverse excursion. Near −1R? The stop is too tight.")
+    jrow := f_jrow3(jt, jrow, "NET", has ? f_r(array.get(K, 0)) : " - ", has ? (array.get(K, 0) > 0.0 ? txG : txR) : txD, mta, "PF", has ? str.tostring(pfG, "#.##") : " - ", has ? (pfG > 1.0 ? txG : txR) : txD, mta, "MAX DD", has ? f_r(-array.get(K, 2)) : " - ", txR, mta)
+    jrow := f_jrow3(jt, jrow, "LONG", f_pc(array.get(J, 10), array.get(J, 9)), txW, mta, "SHORT", f_pc(array.get(J, 12), array.get(J, 11)), txW, mta, "ARMED/FILLED", str.tostring(array.get(J, 13)) + " / " + str.tostring(array.get(J, 14)), txG, "how many setups ever traded into the array")
+    jrow := f_jrow3(jt, jrow, "STREAK L", str.tostring(array.get(J, 5)), txR, "longest run of losses  -  size is what breaks, not the average", "AMBIG", str.tostring(array.get(J, 2)) + " (" + f_pc(array.get(J, 2), n_t) + ")", txA, "bars spanning both levels. Flip the input to bound the effect on your own instrument.", "TIME-STOP", str.tostring(array.get(J, 3)) + " (" + f_pc(array.get(J, 3), n_t) + ")", txD, "closed at max hold. Above ~30% the move happens earlier than your window.")
+    if jFull
+        jrow := f_jrow3(jt, jrow, "AVG WIN", w_t > 0 ? f_r(array.get(K, 3) / w_t) : " - ", txG, mta, "AVG LOSS", l_n > 0 ? f_r(-array.get(K, 4) / l_n) : " - ", txR, mta, "HOLD", has ? str.tostring(1.0 * array.get(J, 8) / n_t, "#.#") + "b" : " - ", txW, mta)
+        jrow := f_jrow3(jt, jrow, "STREAK W", str.tostring(array.get(J, 4)), txG, mta, "BEST/WST", has ? f_r(array.get(K, 5)) + " / " + f_r(array.get(K, 6)) : " - ", txD, mta, "STDEV", n_t > 1 ? str.tostring(array.get(K, 10), "#.##") + "R" : " - ", txW, mta)
+        jrow := f_jrow3(jt, jrow, "SCORE ≥ 4", f_pc(array.get(J, 7), array.get(J, 6)) + " n" + str.tostring(array.get(J, 6)), txW, "if the strong-displacement trades are not better, the score is decoration", "SAMPLE", has ? str.tostring(w_t) + "W / " + str.tostring(l_n) + "L" : " - ", txD, mta, "TF / ROW", tfTxt + " - lb " + str.tostring(wlo, "#.#") + "%", txD, "auto row " + str.tostring(row) + " - pivot " + str.tostring(swLenF) + "b - arm " + str.tostring(armWin) + "b - expiry " + str.tostring(expiry) + "b - zone " + str.tostring(zWin) + "b - sweep " + str.tostring(sweepWin) + "b - cooldown " + str.tostring(cool) + "b")
+        jrow := f_jrow3(jt, jrow, "EXP ASIA", f_bucket(Zc, Zn, 0), f_bucketClr(Zc, Zn, 0), "20:00–00:00 NY", "EXP LONDON", f_bucket(Zc, Zn, 1), f_bucketClr(Zc, Zn, 1), "02:00–05:00 NY", "EXP NY AM", f_bucket(Zc, Zn, 2), f_bucketClr(Zc, Zn, 2), "08:00–11:00 NY")
+        jrow := f_jrow3(jt, jrow, "EXP LC/PM", f_bucket(Zc, Zn, 3), f_bucketClr(Zc, Zn, 3), "London close 10–12 and NY PM 13:30–16", "EXP OFF", f_bucket(Zc, Zn, 4), f_bucketClr(Zc, Zn, 4), "outside every selected window  -  if this beats the killzones, the clock is decoration here", "NO ARRAY", f_bucket(Qc, Qn, 0), f_bucketClr(Qc, Qn, 0), "entered at the swept level because no qualifying FVG/iFVG/OB was left behind")
+        jrow := f_jrow3(jt, jrow, "EXP FVG", f_bucket(Qc, Qn, 1), f_bucketClr(Qc, Qn, 1), "fair-value-gap", "EXP iFVG", f_bucket(Qc, Qn, 2), f_bucketClr(Qc, Qn, 2), "inversion of a failed gap", "EXP OB", f_bucket(Qc, Qn, 3), f_bucketClr(Qc, Qn, 3), "framed order block behind a structure break")
+        jrow := f_jrow3(jt, jrow, "R HIST", has ? f_hist(Rb) : " - ", txW, "buckets ≤-2R - -2..-1 - -1..0 - 0..1 - 1..2 - ≥2R", "TAIL ≤-2R", str.tostring(array.get(Rb, 0)), array.get(Rb, 0) > 0 ? txR : txD, "full-size losses, the stop is being taken by the move it sits beyond", "CLIP ≥2R", str.tostring(array.get(Rb, 5)), array.get(Rb, 5) > 0 ? txG : txD, "compare with AVG MFE: if MFE is far larger, the target is cutting the tail")
+        jrow := f_jrow2(jt, jrow, "SETTINGS", str.tostring(swLenF) + "b pivot - disp ≥" + str.tostring(dispMin) + " - fvg ≥" + str.tostring(fvgMinP, "#.##") + "ATR", txD, mta, "JOURNAL DEPTH", str.tostring(btCost, "#.##") + "R cost - " + str.tostring(jrow + 1) + " rows", txD, "n_trades - n_ambiguous - stdev  -  the row count tells you this table is in Full mode")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESOLVED-TRADE MARKERS  -  drawn on the last bar only, rebuilt in place, so the
+// label budget stays flat no matter how long the chart is
+// ═══════════════════════════════════════════════════════════════════════════════
+if barstate.islast and btOn and showMarks
+    // every entry is a real label.new() result, so no na() guard is needed here  -  and
+    // `na(labelVar)` would be a compile error anyway (label is a bool-backed primitive)
+    while array.size(mLbl) > 0
+        label.delete(array.pop(mLbl))
+    int mn = array.size(jr)
+    int m0 = math.max(0, mn - markN)
+    for i = m0 to mn - 1
+        if i < m0 or i >= mn
+            continue
+        float res = array.get(jr, i)
+        label mkL = label.new(array.get(jbar, i), array.get(jent, i), (res >= 0.0 ? "+" : "") + str.tostring(res, "#.##") + "R", style = res >= 0.0 ? label.style_label_down : label.style_label_up, color = color.new(res >= 0.0 ? green : red, 55), textcolor = color.white, size = size.tiny)
+        array.push(mLbl, mkL)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERT PAYLOAD
+// ═══════════════════════════════════════════════════════════════════════════════
+f_payload(string ev) =>
+    string d = stDir == 1 ? "long" : "short"
+    string a = stKind == 1 ? "FVG" : stKind == 2 ? "iFVG" : stKind == 3 ? "OB" : "level"
+    alertFmt == "JSON" ? '{"event":"' + ev + '","symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","dir":"' + d + '","grade":"' + stGrade + '","score":' + str.tostring(stScore) + ',"array":"' + a + '","entry":' + str.tostring(stEntry, format.mintick) + ',"sl":' + str.tostring(stSl, format.mintick) + ',"tp":' + str.tostring(stTp, format.mintick) + ',"targetR":' + str.tostring(rrFixed, "#.#") + ',"bars_ago":' + str.tostring(bar_index - stBar) + '}' : ev + " " + syminfo.ticker + " " + timeframe.period + " " + d + " - " + stGrade + " " + str.tostring(stScore) + "/6 - " + a + " - E " + str.tostring(stEntry, format.mintick) + " SL " + str.tostring(stSl, format.mintick) + " TP " + str.tostring(stTp, format.mintick)
+
+if alertOn and barstate.isconfirmed
+    if armBullNow or armBearNow
+        alert(f_payload("ARM"), alert.freq_once_per_bar)
+    if fillNow
+        alert(f_payload("FILL"), alert.freq_once_per_bar)
+    if winNow
+        alert(f_payload("TP"), alert.freq_once_per_bar)
+    if lossNow
+        alert(f_payload("SL"), alert.freq_once_per_bar)
+    if voidNow
+        alert(f_payload("VOID"), alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLOTS + ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+colC = delivery > 0 ? green : delivery < 0 ? red : color.gray
+plotcandle(open, high, low, close, "Candles", showCandles ? color.new(colC, bodyT) : na, showCandles ? color.new(colC, wickT) : na, bordercolor = showCandles ? color.new(colC, bodyT) : na)
+plot(showDelivLine ? delivery : na, "State of delivery", style = plot.style_linebr, color = colC, linewidth = 2)
+plotchar(armBearNow, "armed short", "▼", location.top, red, size = size.small)
+plotchar(armBullNow, "armed long", "▲", location.top, green, size = size.small)
+plotchar(fillNow, "filled", "◆", location.top, color.aqua, size = size.small)
+plotchar(winNow, "target", "✓", location.bottom, green, size = size.small)
+plotchar(lossNow, "stop", "✗", location.bottom, red, size = size.small)
+plotchar(voidNow, "void", "∅", location.bottom, color.gray, size = size.tiny)
+
+alertcondition(armBullNow, "CISD v2 armed long", "CISD v2 armed long on {{ticker}} {{interval}}")
+alertcondition(armBearNow, "CISD v2 armed short", "CISD v2 armed short on {{ticker}} {{interval}}")
+alertcondition(fillNow, "CISD v2 entry filled", "CISD v2 entry filled on {{ticker}} {{interval}}")
+alertcondition(winNow, "CISD v2 target hit", "CISD v2 target hit on {{ticker}} {{interval}}")
+alertcondition(lossNow, "CISD v2 stopped", "CISD v2 stopped on {{ticker}} {{interval}}")
+alertcondition(voidNow, "CISD v2 setup voided", "CISD v2 setup voided on {{ticker}} {{interval}}")

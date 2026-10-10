@@ -1,0 +1,718 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+// MX CONTEXT OVERLAY - the reading layer, paired with cisd-ultimate-proper-v2.pine
+//
+// v2 owns the trigger, the risk and the journal. This script places no levels and sizes
+// nothing. It answers the OTHER question, in the vocabulary a ManipulationX-style read
+// uses: which HTF array is holding, what the day has already taken, did the sibling index
+// confirm, and how much stands between here and the draw. Built feature by feature from
+// tools/mx-setups-study.md; every block names the concept page it implements.
+//
+// Two inputs decide what this looks like: Density (how much is drawn) and the three HTF slots
+// (which timeframes count as higher). Everything else is a model parameter, not a decoration.
+//
+// Deliberately absent: setup grades as a verdict (study §4), entries and stops (v2),
+// economic-calendar reads (Pine has no calendar access - the data window here is a clock,
+// not a print).
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("MX Context Overlay  -  build 1.1 (simplified)", "MX Context", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 40)
+
+grpA = "======= Density & session frame ======="
+density  = input.string("Normal", "Density", options=["Minimal", "Normal", "Full"], group=grpA, tooltip="One knob for how much is drawn, because object count is the whole difference between a chart and a wall. Minimal: newest array only, no session lines. Normal: two arrays and two pools per side, session anchors, the 0.5 line. Full: four per side, premium/discount shading, longer spans. Everything below this is model input, not decoration.")
+showAnc  = density != "Minimal"
+showPd   = density == "Full"
+int arrShow  = density == "Minimal" ? 1 : density == "Full" ? 4 : 2
+int poolShow = density == "Minimal" ? 1 : density == "Full" ? 4 : 2
+int arrSpan  = density == "Minimal" ? 60 : density == "Full" ? 320 : 150   // how far back a drawn box reaches
+
+tzIn     = input.string("America/New_York", "Session timezone", group=grpA, tooltip="Anchors the data window, the futures open and the manipulation window. Keep New York even on a broker-timezone chart - on FOREX.com gold the axis is broker time, which is why the clock row can read out of hours while the chart looks busy.")
+preH     = input.int(8, "Data window hour (NY)", minval=0, maxval=23, group=grpA)
+preM     = input.int(30, "Data window minute", minval=0, maxval=59, group=grpA)
+openH    = input.int(9, "Futures open hour (NY)", minval=0, maxval=23, group=grpA)
+openM    = input.int(30, "Futures open minute", minval=0, maxval=59, group=grpA)
+judasMin = input.int(30, "Manipulation window after the open (min)", minval=5, maxval=180, group=grpA, tooltip="24-amd-cycle/amd-on-intraday: the M in AMD is a window, not a feeling. Widen it on a quiet open.")
+openWin  = input.int(5, "Open-wick length (min)", minval=1, maxval=60, group=grpA, tooltip="15-sessions/futures-opening-range: the 9:30 wick is its own liquidity level. His Wednesday note is a triple equal high WITH the 9:30 wick.")
+
+grpB = "======= HTF array registry ======="
+tf1    = input.timeframe("240", "Higher timeframe 1", group=grpB, tooltip="05-pd-arrays/htf-pd-array-hierarchy: which TF the array came from is part of its quality, so it is labelled, never averaged away. Leave blank to disable a slot; a slot equal to the chart timeframe is skipped, because a timeframe cannot be a higher timeframe of itself.")
+tf2    = input.timeframe("60", "Higher timeframe 2", group=grpB)
+tf3    = input.timeframe("15", "Higher timeframe 3", group=grpB)
+arrMin = input.float(0.25, "Min array height (chart ATR)", minval=0.0, maxval=3.0, step=0.05, group=grpB, tooltip="Measured in THIS chart's ATR, so raising it filters small-timeframe arrays harder than large ones. The single knob that decides empty chart versus wall.")
+arrAge = input.int(400, "Array expiry (chart bars)", minval=50, maxval=2000, group=grpB, tooltip="18-mitigation: an unmitigated array stays live, but a stale one is nobody's draw on liquidity.")
+
+grpC = "======= Liquidity pools ======="
+poolOn  = input.bool(true, "Cluster near-equal extremes into pools", group=grpC, tooltip="02-liquidity/relative-equal-highs-lows: extremes in close proximity are functionally equal. A tolerance test, not an equality test.")
+poolLen = input.int(6, "Swing pivot length", minval=2, maxval=30, group=grpC)
+poolTol = input.float(0.20, "Near-equal tolerance (ATR)", minval=0.01, maxval=2.0, step=0.01, group=grpC)
+poolMin = input.int(2, "Touches to make a pool", minval=2, maxval=5, group=grpC, tooltip="2 = twin, 3 = triple equal. The ticks on the label are this touch count.")
+
+grpD = "======= SMT (sibling index) ======="
+smtOn    = input.bool(false, "Compare with a sibling index", group=grpD, tooltip="16-smt-divergence/index-smt. Needs a data entitlement for the other symbol; with none the checkpoint is simply not counted, instead of being passed or failed.")
+smtSym   = input.string("ES1!", "Sibling symbol", group=grpD, tooltip="NQ -> ES1!, ES -> NQ1!, YM -> ES1!. XAUUSD pairs with the dollar index (DX-Y.NYB) - correlated-pairs-smt.md.")
+smtLen   = input.int(400, "How long an SMT stays in force (bars)", minval=20, maxval=2000, group=grpD)
+smtTicks = input.float(2.0, "Min lead over the prior extreme (ticks)", minval=0.0, maxval=50.0, step=0.5, group=grpD, tooltip="How much further my extreme must reach than the previous one before the sibling's failure to confirm means anything.")
+
+grpE = "======= Runway & panel ======="
+obsMax = input.int(2, "Obstacles allowed to the draw", minval=0, maxval=6, group=grpE, tooltip="02-liquidity/low-resistance-liquidity-run: low resistance means almost nothing stands in the way. Counted here, not eyeballed.")
+dashOn = input.bool(true, "Show the checkpoint panel", group=grpE, tooltip="Bottom right, because top right is where the CISD v2 dashboard lives and the two overlapped into unreadability.")
+dense  = input.bool(true, "Update state on bar close only", group=grpE, tooltip="Context is read at the close of the bar that made it. Off = arrays and flags also move intra-bar, at the cost of seeing things that will not survive the bar.")
+
+// Memory bounds for the two registries. Deliberately NOT inputs: they exist to cap objects per
+// script, not to be tuned, and every extra knob on a context layer is a knob someone turns wrongly.
+int arrKeep  = 12
+int poolKeep = 10   // x2 across both sides; a session of pools is ~6
+
+colUp   = input.color(#00c853, "Bullish", group="Display")
+colDn   = input.color(#ff5252, "Bearish", group="Display")
+colInk  = input.color(#eceff1, "Text", group="Display")
+colDim  = input.color(#8296a6, "Dim text", group="Display")
+
+// ─── unit: chart ATR, guarded on the first bars exactly as v2 guards its own ───
+float atrRaw = ta.atr(14)
+float unit   = atrRaw > 0.0 ? atrRaw : syminfo.mintick * 10   // one ta.atr call per bar, never inside a condition (series consistency)
+bool  live   = not dense or barstate.isconfirmed
+
+// ─── NY clock (15-sessions, 30-news-driven) ───
+int  preAt    = preH * 60 + preM
+int  openAt   = openH * 60 + openM
+int  nyMin    = hour(time, tzIn) * 60 + minute(time, tzIn)
+bool weekday  = dayofweek(time, tzIn) >= 2 and dayofweek(time, tzIn) <= 6
+bool inPre    = weekday and nyMin >= preAt and nyMin < openAt
+bool inOpen   = weekday and nyMin >= openAt and nyMin < openAt + openWin
+bool inJudas  = weekday and nyMin >= openAt and nyMin < openAt + judasMin
+bool afterO   = weekday and nyMin >= openAt
+bool inData   = weekday and nyMin >= preAt and nyMin < preAt + 30
+bool newDay   = ta.change(time("D")) != 0
+
+var float preHi  = na
+var float preLo  = na
+var float openPx = na
+var float wickHi = na
+var float wickLo = na
+var float dayHi  = na
+var float dayLo  = na
+var float dataLo = na
+var float dataHi = na
+var int   dayBar = 0
+var bool  tookLo = false
+var bool  tookHi = false
+var bool  backLo = false
+var bool  backHi = false
+
+if newDay
+    preHi  := na
+    preLo  := na
+    openPx := na
+    wickHi := na
+    wickLo := na
+    dayHi  := na
+    dayLo  := na
+    dataLo := na
+    dataHi := na
+    dayBar := bar_index
+    tookLo := false
+    tookHi := false
+    backLo := false
+    backHi := false
+
+if inPre
+    preHi := na(preHi) ? high : math.max(preHi, high)
+    preLo := na(preLo) ? low  : math.min(preLo, low)
+if inOpen
+    wickHi := na(wickHi) ? high : math.max(wickHi, high)
+    wickLo := na(wickLo) ? low  : math.min(wickLo, low)
+if inData
+    dataLo := na(dataLo) ? low  : math.min(dataLo, low)
+    dataHi := na(dataHi) ? high : math.max(dataHi, high)
+if afterO
+    openPx := na(openPx) ? open : openPx
+    dayHi  := na(dayHi) ? high : math.max(dayHi, high)
+    dayLo  := na(dayLo) ? low  : math.min(dayLo, low)
+
+// The Judas test. A run of the extreme that STAYS outside is expansion, not a trap, so both
+// halves must be true: taken, then closed back inside. This is what makes "clean AMD" testable
+// instead of vibes - and it is the one graded item his own chart furniture already draws
+// ("Judas shorts off open", "sweep of London lows").
+if inJudas and not na(preLo)
+    if low < preLo
+        tookLo := true
+    if tookLo and close > preLo
+        backLo := true
+if inJudas and not na(preHi)
+    if high > preHi
+        tookHi := true
+    if tookHi and close < preHi
+        backHi := true
+bool judasBull = backLo and not backHi
+bool judasBear = backHi and not backLo
+
+// Equilibrium of the intraday dealing range: his "0.5" line, and the 0.5 the corpus makes a hard
+// requirement for a continuation entry (28-fibonacci-levels/fib-anchoring, 05-pd-arrays/dealing-range).
+float rngHi  = na(dayHi) ? high : dayHi
+float rngLo  = na(dayLo) ? low  : dayLo
+float eq     = (rngHi + rngLo) * 0.5
+bool  inDisc = close < eq
+bool  inPrem = close > eq
+float pos01  = rngHi > rngLo ? (close - rngLo) / (rngHi - rngLo) : 0.5
+
+// ─── HTF arrays ───
+// One security call per slot, 4-tuple each, so a slot costs one call and the timeframe label
+// survives. The gap is MEASURED on the higher timeframe and MITIGATED with this chart's closes,
+// because an HTF bar cannot see the inside of itself. lookahead_on + [1] = last completed HTF
+// bar, so nothing repaints (the form already proven in v2). No int sentinel in the tuple: a
+// bar_index element came back 0 from the reference runtime, and a value-changed test is both
+// weaker to get wrong and cheaper to read.
+f_tfLbl(string t) =>
+    t == "240" ? "4H" : t == "480" ? "8H" : t == "120" ? "2H" : t == "60" ? "1H" : t == "30" ? "30M" : t == "15" ? "15M" : t == "5" ? "5M" : t == "3" ? "3M" : t == "1" ? "1M" : t == "D" ? "1D" : t == "W" ? "1W" : t == "M" ? "1MN" : t + " TF"
+
+ok1  = tf1 != "" and tf1 != timeframe.period
+ok2  = tf2 != "" and tf2 != timeframe.period
+ok3  = tf3 != "" and tf3 != timeframe.period
+[t1u, t1l, r1t, r1b] = request.security(syminfo.tickerid, tf1, [low[1] > high[3] ? low[1] : na, low[1] > high[3] ? high[3] : na, high[1] < low[3] ? low[3] : na, high[1] < low[3] ? high[1] : na], barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[t2u, t2l, r2t, r2b] = request.security(syminfo.tickerid, tf2, [low[1] > high[3] ? low[1] : na, low[1] > high[3] ? high[3] : na, high[1] < low[3] ? low[3] : na, high[1] < low[3] ? high[1] : na], barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[t3u, t3l, r3t, r3b] = request.security(syminfo.tickerid, tf3, [low[1] > high[3] ? low[1] : na, low[1] > high[3] ? high[3] : na, high[1] < low[3] ? low[3] : na, high[1] < low[3] ? high[1] : na], barmerge.gaps_off, lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+
+// Registry. dir +1 = bullish array (support below), -1 = bearish (resistance above).
+// st 0 = fresh, 1 = partially mitigated, 2 = run through (spent, drawn as an inversion).
+var array<float>  aTop = array.new_float(0)
+var array<float>  aBot = array.new_float(0)
+var array<int>    aDir = array.new_int(0)
+var array<int>    aBar = array.new_int(0)
+var array<int>    aSt  = array.new_int(0)
+var array<string> aTf  = array.new_string(0)
+var array<box>    aBx  = array.new_box(0)
+var array<label>  aLb  = array.new_label(0)
+
+f_pushArr(float top, float bot, int dir, string tfS) =>
+    int n = array.size(aTop)
+    bool dup = false
+    for j = n - 1 to 0
+        if j < 0 or j >= n
+            continue
+        if not dup
+            dup := array.get(aDir, j) == dir and math.abs(array.get(aTop, j) - top) < syminfo.mintick and math.abs(array.get(aBot, j) - bot) < syminfo.mintick
+    if not dup and top > bot and top - bot >= arrMin * unit and top > 0.0
+        array.push(aTop, top)
+        array.push(aBot, bot)
+        array.push(aDir, dir)
+        array.push(aBar, bar_index)
+        array.push(aSt, 0)
+        array.push(aTf, tfS)
+        array.push(aBx, na)
+        array.push(aLb, na)
+    int(array.size(aTop))
+
+// A security value is held flat for the whole forming HTF bar, so "changed since the last time I
+// looked" IS the new-array event. The memory resets while the slot reads na, so an identical gap
+// reappearing later still registers. Bullish and bearish sides keep separate memory: a bearish
+// gap on a bar with no bullish gap must not be swallowed by the bullish side's equality test.
+var float sm1 = na
+var float sk1 = na
+var float sm2 = na
+var float sk2 = na
+var float sm3 = na
+var float sk3 = na
+
+if live
+    if ok1
+        if na(t1u)
+            sm1 := na
+        else if na(sm1) or t1u != sm1
+            sm1 := t1u
+            if not na(t1l)
+                f_pushArr(t1u, t1l, 1, tf1)
+        if na(r1t)
+            sk1 := na
+        else if na(sk1) or r1t != sk1
+            sk1 := r1t
+            if not na(r1b)
+                f_pushArr(r1t, r1b, -1, tf1)
+    if ok2
+        if na(t2u)
+            sm2 := na
+        else if na(sm2) or t2u != sm2
+            sm2 := t2u
+            if not na(t2l)
+                f_pushArr(t2u, t2l, 1, tf2)
+        if na(r2t)
+            sk2 := na
+        else if na(sk2) or r2t != sk2
+            sk2 := r2t
+            if not na(r2b)
+                f_pushArr(r2t, r2b, -1, tf2)
+    if ok3
+        if na(t3u)
+            sm3 := na
+        else if na(sm3) or t3u != sm3
+            sm3 := t3u
+            if not na(t3l)
+                f_pushArr(t3u, t3l, 1, tf3)
+        if na(r3t)
+            sk3 := na
+        else if na(sk3) or r3t != sk3
+            sk3 := r3t
+            if not na(r3b)
+                f_pushArr(r3t, r3b, -1, tf3)
+
+// ─── Pools: near-equal extremes carrying a touch count (his $ $ $) ───
+float pivHi = ta.pivothigh(high, poolLen, poolLen)
+float pivLo = ta.pivotlow(low, poolLen, poolLen)
+
+var array<float> pPx   = array.new_float(0)
+var array<int>   pDir  = array.new_int(0)
+var array<int>   pHits = array.new_int(0)
+var array<int>   pBar  = array.new_int(0)
+var array<bool>  pRun  = array.new_bool(0)
+var array<line>  pLn   = array.new_line(0)
+var array<label> pLb   = array.new_label(0)
+
+f_pushPool(float px, int dir) =>
+    int n = array.size(pPx)
+    int at = -1
+    for j = n - 1 to 0
+        if j < 0 or j >= n
+            continue
+        if at < 0 and array.get(pDir, j) == dir and not array.get(pRun, j) and math.abs(array.get(pPx, j) - px) <= poolTol * unit
+            at := j
+    if at < 0
+        array.push(pPx, px)
+        array.push(pDir, dir)
+        array.push(pHits, 1)
+        array.push(pBar, bar_index - poolLen)
+        array.push(pRun, false)
+        array.push(pLn, na)
+        array.push(pLb, na)
+    else
+        array.set(pHits, at, array.get(pHits, at) + 1)
+        // A pool is the FAR edge of its cluster, not the mean: the resting stops sit beyond the
+        // highest high / lowest low, and averaging them quietly loses a tick of liquidity.
+        array.set(pPx, at, dir > 0 ? math.max(array.get(pPx, at), px) : math.min(array.get(pPx, at), px))
+        array.set(pBar, at, bar_index - poolLen)
+    int(array.size(pPx))
+
+if live and poolOn and not na(pivHi)
+    f_pushPool(pivHi, 1)
+if live and poolOn and not na(pivLo)
+    f_pushPool(pivLo, -1)
+
+if live
+    int np = array.size(pPx)
+    for j = np - 1 to 0
+        if j < 0 or j >= np
+            continue
+        // A pool is taken on a CLOSE through it. A wick through is a partial run and the
+        // liquidity still stands (02-liquidity/trendline-liquidity is explicit on this).
+        bool ran = array.get(pDir, j) > 0 ? close > array.get(pPx, j) : close < array.get(pPx, j)
+        if ran and not array.get(pRun, j)
+            array.set(pRun, j, true)
+
+// ─── The draw on liquidity: nearest standing pool with enough touches, on the bias side ───
+f_dol(int wantDir) =>
+    int n = array.size(pPx)
+    float best = na
+    int hits = 0
+    for j = n - 1 to 0
+        if j < 0 or j >= n
+            continue
+        float d = wantDir > 0 ? array.get(pPx, j) - close : close - array.get(pPx, j)
+        bool cand = array.get(pDir, j) == wantDir and not array.get(pRun, j) and array.get(pHits, j) >= poolMin and d > 0.0
+        if cand and (na(best) or d < math.abs(best - close))
+            best := array.get(pPx, j)
+            hits := array.get(pHits, j)
+    [best, hits]
+
+int want = inPrem ? -1 : 1
+[dolPx, dolHits] = f_dol(want)
+
+// ─── SMT against the sibling, compared on pivots so the two are aligned by construction ───
+// One index fails to confirm the other's extreme - that non-confirm IS the statement.
+float sibHi = request.security(smtSym, timeframe.period, ta.pivothigh(high, poolLen, poolLen), barmerge.gaps_off, ignore_invalid_symbol = true)
+float sibLo = request.security(smtSym, timeframe.period, ta.pivotlow(low, poolLen, poolLen), barmerge.gaps_off, ignore_invalid_symbol = true)
+bool smtHave = smtOn and (not na(sibHi) or not na(sibLo))
+
+var float myPrevLo  = na
+var float myPrevHi  = na
+var float sibPrevLo = na
+var float sibPrevHi = na
+var bool  smtBull   = false
+var bool  smtBear   = false
+var int   smtBar    = -1
+
+if live and smtOn
+    if not na(pivLo)
+        bool mineLL = na(myPrevLo) ? false : pivLo < myPrevLo - smtTicks * syminfo.mintick
+        bool sibNo  = na(sibLo) or (not na(sibPrevLo) and sibLo > sibPrevLo)
+        if mineLL and sibNo
+            smtBull := true
+            smtBear := false
+            smtBar  := bar_index
+        myPrevLo  := pivLo
+        sibPrevLo := sibLo
+    if not na(pivHi)
+        bool mineHH = na(myPrevHi) ? false : pivHi > myPrevHi + smtTicks * syminfo.mintick
+        bool sibNoH = na(sibHi) or (not na(sibPrevHi) and sibHi < sibPrevHi)
+        if mineHH and sibNoH
+            smtBear := true
+            smtBull := false
+            smtBar  := bar_index
+        myPrevHi  := pivHi
+        sibPrevHi := sibHi
+if smtBull or smtBear
+    if bar_index - smtBar > smtLen
+        smtBull := false
+        smtBear := false
+
+// ─── One pass over the registry: mitigate, expire, count, draw ───
+// This was two passes - a scoring scan and, further down, a drawing scan - and the score read the
+// mitigation state BEFORE this bar's mitigation ran, so an array closed through on this bar still
+// counted as live context for one bar. One loop cannot be out of order. A spent array is now
+// DELETED rather than relabelled "inv": an inverted gap is history, not a draw on liquidity, and
+// those unbounded boxes were the walls sitting on the bottom half of a 5m gold chart.
+bool delivBull = false
+bool delivBear = false
+bool heldBull  = false
+bool heldBear  = false
+string delivTf = ""
+var int invSeen = 0          // arrays closed through since load; the tooltip on FVG delivery
+
+int ad = array.size(aTop)
+for j = ad - 1 to 0
+    if j < 0 or j >= ad
+        continue
+    int d0 = array.get(aDir, j)
+    if live
+        int st0 = array.get(aSt, j)
+        if d0 > 0
+            if low <= array.get(aTop, j) and st0 == 0
+                array.set(aSt, j, 1)
+            if close < array.get(aBot, j)
+                array.set(aSt, j, 2)
+        else
+            if high >= array.get(aBot, j) and st0 == 0
+                array.set(aSt, j, 1)
+            if close > array.get(aTop, j)
+                array.set(aSt, j, 2)
+    int  st1  = array.get(aSt, j)
+    int  born = array.get(aBar, j)
+    bool gone = st1 == 2 or bar_index - born > arrAge
+    if gone
+        if st1 == 2
+            invSeen := invSeen + 1
+        box bxDel = array.get(aBx, j)
+        label lbDel = array.get(aLb, j)
+        if not na(bxDel)
+            box.delete(bxDel)
+        if not na(lbDel)
+            label.delete(lbDel)
+        array.remove(aTop, j)
+        array.remove(aBot, j)
+        array.remove(aDir, j)
+        array.remove(aBar, j)
+        array.remove(aSt, j)
+        array.remove(aTf, j)
+        array.remove(aBx, j)
+        array.remove(aLb, j)
+        continue
+    // Standing arrays are fresh by construction (expiry was just applied), so "delivery" is simply
+    // "an array on this side is still alive", and "held" is price trading back out of it.
+    if d0 > 0
+        delivBull := true
+        if delivTf == ""
+            delivTf := f_tfLbl(array.get(aTf, j))
+        if array.get(aTop, j) <= close + 0.5 * unit and low <= array.get(aTop, j) and close >= array.get(aBot, j)
+            heldBull := true
+    else
+        delivBear := true
+        if delivTf == ""
+            delivTf := f_tfLbl(array.get(aTf, j))
+        if array.get(aBot, j) >= close - 0.5 * unit and high >= array.get(aBot, j) and close <= array.get(aTop, j)
+            heldBear := true
+    if j < arrShow * 2
+        int x1 = math.max(born, bar_index - arrSpan)
+        box bx = array.get(aBx, j)
+        label lb = array.get(aLb, j)
+        if na(bx)
+            array.set(aBx, j, box.new(x1, array.get(aTop, j), bar_index + 4, array.get(aBot, j), bgcolor = color.new(d0 > 0 ? colUp : colDn, 88), border_color = color.new(d0 > 0 ? colUp : colDn, 76), border_width = 1))
+        else
+            box.set_left(bx, x1)
+            box.set_top(bx, array.get(aTop, j))
+            box.set_bottom(bx, array.get(aBot, j))
+            box.set_right(bx, bar_index + 4)
+        string tag = f_tfLbl(array.get(aTf, j)) + " FVG" + (st1 == 1 ? " held" : "")
+        if na(lb)
+            array.set(aLb, j, label.new(bar_index + 4, d0 > 0 ? array.get(aBot, j) : array.get(aTop, j), tag, style = d0 > 0 ? label.style_label_up : label.style_label_down, color = color.new(color.black, 100), textcolor = d0 > 0 ? colUp : colDn, size = size.tiny))
+        else
+            label.set_text(lb, tag)
+            label.set_x(lb, bar_index + 4)
+            label.set_y(lb, d0 > 0 ? array.get(aBot, j) : array.get(aTop, j))
+    else
+        box bxH = array.get(aBx, j)
+        label lbH = array.get(aLb, j)
+        if not na(bxH)
+            box.delete(bxH)
+            array.set(aBx, j, na)
+        if not na(lbH)
+            label.delete(lbH)
+            array.set(aLb, j, na)
+
+while array.size(aTop) > arrKeep
+    box bxD = array.shift(aBx)
+    label lbD = array.shift(aLb)
+    if not na(bxD)
+        box.delete(bxD)
+    if not na(lbD)
+        label.delete(lbD)
+    array.shift(aTop)
+    array.shift(aBot)
+    array.shift(aDir)
+    array.shift(aBar)
+    array.shift(aSt)
+    array.shift(aTf)
+// ─── Low-resistance runway: what stands between here and that draw ───
+// Deliberately AFTER the registry pass above: counted against the pre-mitigation registry it would
+// treat an array closed through on this bar as an obstacle for this bar.
+int obs = 0
+float run1 = na(dolPx) ? na : math.abs(dolPx - close) / unit
+if not na(dolPx)
+    int na_ = array.size(aTop)
+    for j = na_ - 1 to 0
+        if j < 0 or j >= na_
+            continue
+        if array.get(aSt, j) < 2
+            bool inWay = dolPx > close ? array.get(aTop, j) > close and array.get(aBot, j) < dolPx : array.get(aBot, j) < close and array.get(aTop, j) > dolPx
+            if inWay
+                obs := obs + 1
+    int np2 = array.size(pPx)
+    for j = np2 - 1 to 0
+        if j < 0 or j >= np2
+            continue
+        if array.get(pHits, j) >= poolMin and not array.get(pRun, j) and array.get(pPx, j) != dolPx
+            bool inWay2 = dolPx > close ? array.get(pPx, j) > close and array.get(pPx, j) < dolPx : array.get(pPx, j) < close and array.get(pPx, j) > dolPx
+            if inWay2
+                obs := obs + 1
+bool lowRes = not na(dolPx) and obs <= obsMax
+
+// ─── Bias: four independent statements, summed. Not a magic number. ───
+int bull = (judasBull ? 1 : 0) + (heldBull or delivBull ? 1 : 0) + (smtBull ? 1 : 0) + (inDisc ? 1 : 0)
+int bear = (judasBear ? 1 : 0) + (heldBear or delivBear ? 1 : 0) + (smtBear ? 1 : 0) + (inPrem ? 1 : 0)
+int bias = bull - bear
+string biasTxt = bull > bear ? "Bullish" : bear > bull ? "Bearish" : "Neutral"
+color  biasCol = bull > bear ? colUp : bear > bull ? colDn : colDim
+
+int pn = array.size(pPx)
+for j = pn - 1 to 0
+    if j < 0 or j >= pn
+        continue
+    int cnt = array.get(pHits, j)
+    int d3  = array.get(pDir, j)
+    bool stand = cnt >= poolMin and not array.get(pRun, j) and (d3 > 0 ? array.get(pPx, j) > close : array.get(pPx, j) < close)
+    bool show2 = stand and j < poolShow * 2
+    line ln = array.get(pLn, j)
+    label pl = array.get(pLb, j)
+    if not show2
+        if not na(ln)
+            line.delete(ln)
+            array.set(pLn, j, na)
+        if not na(pl)
+            label.delete(pl)
+            array.set(pLb, j, na)
+    else
+        color c3 = d3 > 0 ? colDn : colUp
+        if na(ln)
+            array.set(pLn, j, line.new(array.get(pBar, j), array.get(pPx, j), bar_index + 4, array.get(pPx, j), color = color.new(c3, 25), style = line.style_dashed, width = 1))
+        else
+            line.set_x2(ln, bar_index + 4)
+        string ticks = cnt == 2 ? "$$" : cnt == 3 ? "$$$" : cnt == 4 ? "$$$$" : "$$$$$"
+        string txt2 = (d3 > 0 ? "equal high  " : "equal low  ") + str.tostring(cnt) + " touch  " + ticks
+        if na(pl)
+            array.set(pLb, j, label.new(bar_index + 4, array.get(pPx, j), txt2, style = d3 > 0 ? label.style_label_down : label.style_label_up, color = color.new(color.black, 100), textcolor = color.new(c3, 25), size = size.tiny))
+        else
+            label.set_text(pl, txt2)
+            label.set_x(pl, bar_index + 4)
+            label.set_y(pl, array.get(pPx, j))
+
+while array.size(pPx) > poolKeep * 2
+    line lxD = array.shift(pLn)
+    label lyD = array.shift(pLb)
+    if not na(lxD)
+        line.delete(lxD)
+    if not na(lyD)
+        label.delete(lyD)
+    array.shift(pPx)
+    array.shift(pDir)
+    array.shift(pHits)
+    array.shift(pBar)
+    array.shift(pRun)
+
+// ─── Checkpoints, with the FAILING one named (v2's BLOCKED BY, same spirit) ───
+// SMT is counted ONLY when it can actually be true. The old version handed out a point for "off",
+// which is how a chart with no delivery and no sibling data still read A-: a free pass is worse
+// than a missing one, because it moves the grade without moving the read.
+int smtCount = smtOn and smtHave ? 1 : 0
+bool cpSide  = bias != 0
+bool cpArray = bias > 0 ? heldBull or delivBull : bias < 0 ? heldBear or delivBear : false
+bool cpDeliv = bias > 0 ? delivBull : bias < 0 ? delivBear : false
+bool cpSmt   = smtCount == 0 or (bias > 0 ? smtBull : bias < 0 ? smtBear : false)
+bool cpAmd   = judasBull or judasBear or (bias > 0 and tookLo) or (bias < 0 and tookHi)
+bool cpHalf  = bias > 0 ? pos01 <= 0.5 : bias < 0 ? pos01 >= 0.5 : false
+bool cpPool  = not na(dolPx) and dolHits >= poolMin
+bool cpRun   = lowRes
+int  nTot    = 6 + smtCount
+int  passN   = (cpDeliv ? 1 : 0) + (cpAmd ? 1 : 0) + (cpHalf ? 1 : 0) + (cpPool ? 1 : 0) + (cpRun ? 1 : 0) + (cpArray ? 1 : 0) + (cpSmt ? smtCount : 0)
+float frac   = nTot > 0 ? 1.0 * passN / nTot : 0.0
+string grade = not cpSide ? "none" : frac >= 0.995 ? "A+" : frac >= 0.85 ? "A" : frac >= 0.7 ? "A-" : frac >= 0.55 ? "B+" : "C"
+
+string defects = ""
+if not cpSide
+    defects := "no bias"
+if not cpDeliv
+    defects := defects + (defects == "" ? "" : ", ") + "no FVG delivery"
+if smtCount > 0 and not cpSmt
+    defects := defects + (defects == "" ? "" : ", ") + "no SMT confirm"
+if not cpAmd
+    defects := defects + (defects == "" ? "" : ", ") + "AMD not clean"
+if not cpHalf
+    defects := defects + (defects == "" ? "" : ", ") + "wrong side of 0.5"
+if not cpPool
+    defects := defects + (defects == "" ? "" : ", ") + "no pool ahead"
+if not cpRun
+    defects := defects + (defects == "" ? "" : ", ") + "runway blocked"
+defects := defects == "" ? "none" : str.length(defects) > 64 ? str.substring(defects, 0, 62) + "..." : defects
+// ─── Session frame: pre-open, open, the 9:30 wick, the data extremes, the draw, the 0.5 ───
+var line lPreHi  = na
+var line lPreLo  = na
+var line lOpen   = na
+var line lWkHi   = na
+var line lWkLo   = na
+var line lDataLo = na
+var line lDataHi = na
+var line lDol    = na
+var line lEq     = na
+var label aDol   = na
+var label aEq    = na
+
+if showAnc and live
+    if na(lPreHi) and not na(preHi)
+        lPreHi := line.new(dayBar, preHi, bar_index + 4, preHi, color = color.new(colDim, 15), style = line.style_solid, width = 1)
+    if not na(lPreHi) and not na(preHi)
+        line.set_y1(lPreHi, preHi)
+        line.set_y2(lPreHi, preHi)
+        line.set_x2(lPreHi, bar_index + 4)
+    if na(lPreLo) and not na(preLo)
+        lPreLo := line.new(dayBar, preLo, bar_index + 4, preLo, color = color.new(colDim, 15), style = line.style_solid, width = 1)
+    if not na(lPreLo) and not na(preLo)
+        line.set_y1(lPreLo, preLo)
+        line.set_y2(lPreLo, preLo)
+        line.set_x2(lPreLo, bar_index + 4)
+    if na(lOpen) and not na(openPx)
+        lOpen := line.new(dayBar, openPx, bar_index + 4, openPx, color = color.new(colInk, 45), style = line.style_solid, width = 1)
+    if not na(lOpen) and not na(openPx)
+        line.set_y1(lOpen, openPx)
+        line.set_y2(lOpen, openPx)
+        line.set_x2(lOpen, bar_index + 4)
+    if na(lWkHi) and not na(wickHi)
+        lWkHi := line.new(dayBar, wickHi, bar_index + 4, wickHi, color = color.new(colDn, 40), style = line.style_dotted, width = 1)
+    if not na(lWkHi)
+        line.set_x2(lWkHi, bar_index + 4)
+    if na(lWkLo) and not na(wickLo)
+        lWkLo := line.new(dayBar, wickLo, bar_index + 4, wickLo, color = color.new(colUp, 40), style = line.style_dotted, width = 1)
+    if not na(lWkLo)
+        line.set_x2(lWkLo, bar_index + 4)
+    if na(lDataLo) and not na(dataLo)
+        lDataLo := line.new(bar_index - 12, dataLo, bar_index + 4, dataLo, color = color.new(colUp, 20), style = line.style_solid, width = 2)
+    if not na(lDataLo) and not na(dataLo)
+        line.set_y1(lDataLo, dataLo)
+        line.set_y2(lDataLo, dataLo)
+        line.set_x2(lDataLo, bar_index + 4)
+    if na(lDataHi) and not na(dataHi)
+        lDataHi := line.new(bar_index - 12, dataHi, bar_index + 4, dataHi, color = color.new(colDn, 20), style = line.style_solid, width = 2)
+    if not na(lDataHi) and not na(dataHi)
+        line.set_y1(lDataHi, dataHi)
+        line.set_y2(lDataHi, dataHi)
+        line.set_x2(lDataHi, bar_index + 4)
+
+if not na(dolPx)
+    if na(lDol)
+        lDol := line.new(bar_index - 30, dolPx, bar_index + 4, dolPx, color = color.new(colInk, 0), style = line.style_solid, width = 2)
+    if not na(lDol)
+        line.set_y1(lDol, dolPx)
+        line.set_y2(lDol, dolPx)
+        line.set_x2(lDol, bar_index + 4)
+    if na(aDol)
+        aDol := label.new(bar_index + 4, dolPx, "DOL", style = dolPx > close ? label.style_label_down : label.style_label_up, color = color.new(color.black, 100), textcolor = colInk, size = size.small)
+    if not na(aDol)
+        label.set_x(aDol, bar_index + 4)
+        label.set_y(aDol, dolPx)
+        label.set_text(aDol, "DOL " + str.tostring(dolHits) + "tp")
+else
+    if not na(lDol)
+        line.delete(lDol)
+        lDol := na
+    if not na(aDol)
+        label.delete(aDol)
+        aDol := na
+
+if showPd
+    if na(lEq)
+        lEq  := line.new(dayBar, eq, bar_index + 4, eq, color = color.new(colInk, 55), style = line.style_dashed, width = 1)
+        aEq := label.new(bar_index + 4, eq, "0.5", style = label.style_label_left, color = color.new(color.black, 100), textcolor = colDim, size = size.tiny)
+    if not na(lEq)
+        line.set_y1(lEq, eq)
+        line.set_y2(lEq, eq)
+        line.set_x2(lEq, bar_index + 4)
+        label.set_x(aEq, bar_index + 4)
+        label.set_y(aEq, eq)
+
+var label smtLb = na
+if smtHave and (smtBull or smtBear)
+    if na(smtLb)
+        smtLb := label.new(bar_index, close, "SMT", style = label.style_label_left, color = color.new(color.black, 100), textcolor = colDim, size = size.small)
+    if not na(smtLb)
+        label.set_x(smtLb, bar_index)
+        label.set_y(smtLb, close)
+        label.set_text(smtLb, (smtBull ? "bullish SMT w/ " : "bearish SMT w/ ") + smtSym)
+else
+    if not na(smtLb)
+        label.delete(smtLb)
+        smtLb := na
+
+// ─── The panel: two checkpoints per row, bottom right, and it stops repeating itself ───
+// Bottom right because v2's dashboard owns top right, and on a 5m chart the two tables overlapped
+// into unreadability. Four columns instead of two so the same information fits in seven rows.
+var table dash = table.new(position.bottom_right, 4, 7, bgcolor = color.new(#10161c, 8), border_width = 0, frame_color = color.new(colInk, 70), frame_width = 1)
+
+f_put(int r, int c, string s, color bg, color fg, string tt) =>
+    table.cell(dash, c, r, s, text_color = fg, text_size = size.small, bgcolor = bg, tooltip = tt)
+
+f_mark(bool okk) =>
+    okk ? "✓" : "✗"
+
+if dashOn and (not dense or barstate.islast)
+    f_put(0, 0, "Bias", color.new(colInk, 88), colInk, "Sum of four independent statements. A read, not a trigger: this script places nothing.")
+    f_put(0, 1, biasTxt, color.new(biasCol, 76), biasCol, "bull " + str.tostring(bull) + " / bear " + str.tostring(bear))
+    f_put(0, 2, "Passed", color.new(colInk, 88), colDim, "Checkpoints passed out of the ones that can be true. SMT is excluded while it is off, so the fraction cannot be inflated by a disabled test.")
+    f_put(0, 3, str.tostring(passN) + "/" + str.tostring(nTot) + "  " + grade, color.new(biasCol, 76), colInk, "not a signal - see the study, section 4")
+    f_put(1, 0, "Checkpoint", color.new(colInk, 92), colDim, "")
+    f_put(1, 1, "Status", color.new(colInk, 92), colDim, "")
+    f_put(1, 2, "Checkpoint", color.new(colInk, 92), colDim, "")
+    f_put(1, 3, "Status", color.new(colInk, 92), colDim, "")
+    f_put(2, 0, "FVG delivery", color.new(colInk, 96), colInk, "Did the leg leave an array standing behind it? Both of his downgrades were this: no FVG delivery (bad).")
+    f_put(2, 1, f_mark(cpDeliv) + (delivTf == "" ? "" : " " + delivTf), color.new(cpDeliv ? colUp : colDn, 74), colInk, "arrays closed through and dropped since load: " + str.tostring(invSeen))
+    f_put(2, 2, "Reacting from array", color.new(colInk, 96), colInk, "Price is trading OUT of an array right now, not merely near one. His delivering from 4H FVG.")
+    f_put(2, 3, f_mark(cpArray), color.new(cpArray ? colUp : colDn, 74), colInk, "")
+    f_put(3, 0, "AMD / Judas run", color.new(colInk, 96), colInk, "Pre-open extreme taken since the open and reclaimed inside the window. A run that stays outside is expansion, not a trap.")
+    f_put(3, 1, f_mark(cpAmd) + (judasBull ? " low" : judasBear ? " high" : ""), color.new(cpAmd ? colUp : colDn, 74), colInk, "")
+    f_put(3, 2, "SMT confirm", color.new(colInk, 96), colInk, "The sibling failed to confirm my extreme - 16-smt-divergence/index-smt.")
+    f_put(3, 3, not smtOn ? "off" : not smtHave ? "no data" : f_mark(cpSmt), color.new(cpSmt ? colUp : colDn, 74), colInk, "off and no data are not passes and not defects: the row is simply not counted")
+    f_put(4, 0, "Half of the range", color.new(colInk, 96), colInk, "Long below the 0.5, short above it - 28-fibonacci-levels/fib-anchoring, 05-pd-arrays/dealing-range.")
+    f_put(4, 1, f_mark(cpHalf) + " " + str.tostring(pos01 * 100, "#") + "%", color.new(cpHalf ? colUp : colDn, 74), colInk, "position inside the day range: 0 = low, 100 = high")
+    f_put(4, 2, "Pool ahead to take", color.new(colInk, 96), colInk, "Nearest standing pool with enough touches, on this side of price.")
+    f_put(4, 3, f_mark(cpPool) + (cpPool ? " " + str.tostring(dolHits) + " touch" : ""), color.new(cpPool ? colUp : colDn, 74), colInk, not na(dolPx) ? "distance to it: " + str.tostring(run1, "#.#") + " ATR" : "no standing pool on this side of price")
+    f_put(5, 0, "Low-resistance runway", color.new(colInk, 96), colInk, "Live arrays plus standing pools between here and that draw - 02-liquidity/low-resistance-liquidity-run.")
+    f_put(5, 1, f_mark(cpRun) + " " + str.tostring(obs), color.new(cpRun ? colUp : colDn, 74), colInk, "obstacles allowed: " + str.tostring(obsMax))
+    f_put(5, 2, "Arrays standing", color.new(colInk, 96), colInk, "Registry size after this bar's mitigation and expiry. 0 on a chart full of gaps means the height filter, not the market, is doing the work.")
+    f_put(5, 3, str.tostring(array.size(aTop)), color.new(array.size(aTop) > 0 ? colUp : colDn, 74), colDim, "density " + density + " - " + str.tostring(arrShow) + " drawn per side")
+    f_put(6, 0, "Defects", color.new(colInk, 96), colDim, "The named (bad) bullets a human would write. Everything below A+ is a named defect, not a mood.")
+    f_put(6, 1, defects, color.new(defects == "none" ? colUp : colDn, 84), colDim, defects)
+    f_put(6, 2, "", color.new(colInk, 96), colDim, "")
+    f_put(6, 3, "", color.new(colInk, 96), colDim, "")

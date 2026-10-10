@@ -1,0 +1,1264 @@
+//@version=6
+indicator("CISD Ultimate Balanced", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
+
+// ═══════════════════════════════════════════════════════════════════
+// PRESET SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+preset = input.string("5min", "Timeframe Preset", options=["3min", "5min", "15min", "30min", "Custom"], group="======= PRESET =======")
+
+// ═══════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════
+tolerence_inp          = input.float(0.60, "Noise Filter", group="Calculations", maxval=1, minval=0, step=0.05)
+len_inp                = input.int(10, "Swing Period", group="Calculations")
+expiry_bars            = input.int(60, "Expiry Bars", group="Calculations")
+liquidity_lookback     = input.int(12, "Liquidity Lookback", group="Calculations")
+
+grp_conf = "======= Core Confluences ======="
+require_liq_sweep   = input.bool(false, "Require Liquidity Sweep", group=grp_conf)
+require_fvg         = input.bool(false, "Require FVG / iFVG", group=grp_conf)
+require_strong_disp = input.bool(false, "Require Strong Displacement", group=grp_conf)
+require_htf_bias    = input.bool(false, "Require HTF Bias Alignment", group=grp_conf)
+htf_tf              = input.timeframe("60", "HTF for Bias", group=grp_conf)
+strong_disp_mult    = input.float(0.78, "Strong Displacement Threshold", minval=0.5, maxval=1.0, step=0.05, group=grp_conf)
+
+grp_elite = "======= Elite Confluences ======="
+require_ob          = input.bool(false, "Require Order Block", group=grp_elite)
+require_prem_disc   = input.bool(false, "Require Premium/Discount", group=grp_elite)
+require_ifvg        = input.bool(false, "Prefer Inversion FVG", group=grp_elite)
+require_body_pct    = input.bool(false, "Require Strong Body %", group=grp_elite)
+body_pct_min        = input.float(0.58, "Min Body % of Range", minval=0.4, maxval=0.9, step=0.05, group=grp_elite)
+
+grp_q = "======= Quality & Risk ======="
+min_score_inp       = input.int(2, "Minimum Score for BEST", minval=1, maxval=5, group=grp_q)
+show_risk_levels    = input.bool(true, "Show Entry / SL / TP", group=grp_q)
+show_liquidity_tgt  = input.bool(true, "Show Auto Liquidity Target", group=grp_q)
+rr_target           = input.float(2.0, "Risk:Reward Target", minval=1.0, step=0.1, group=grp_q)
+atr_mult_sl_inp     = input.float(0.35, "SL Buffer (ATR)", minval=0.1, step=0.05, group=grp_q)
+cooldown_inp        = input.int(6, "Signal Cooldown (bars)", minval=0, group=grp_q)
+auto_invalidate     = input.bool(true, "Auto-Invalidate on Origin Break", group=grp_q)
+clean_after_bars    = input.int(35, "Delete old BEST after X bars", minval=10, group=grp_q)
+
+grp_form = "======= Forming Setup Visuals ======="
+show_live_fvgs      = input.bool(true, "Show Live FVGs", group=grp_form)
+show_live_obs       = input.bool(true, "Show Live Order Blocks", group=grp_form)
+show_live_ifvgs     = input.bool(true, "Show Live iFVGs", group=grp_form)
+max_fvgs_inp        = input.int(2, "Max FVGs per side", minval=1, maxval=4, group=grp_form)
+max_obs_inp         = input.int(1, "Max OBs per side", minval=1, maxval=2, group=grp_form)
+max_ifvg_inp        = input.int(1, "Max iFVGs", minval=1, maxval=2, group=grp_form)
+fvg_transparency    = input.int(88, "FVG Transparency", minval=70, maxval=95, group=grp_form)
+ob_transparency     = input.int(85, "OB Transparency", minval=70, maxval=95, group=grp_form)
+only_near_price     = input.bool(true, "Only show zones near current price", group=grp_form)
+near_mult_inp       = input.float(2.2, "Near price = ATR ×", minval=1.0, step=0.3, group=grp_form)
+min_fvg_atr         = input.float(0.40, "Min FVG size (ATR)", minval=0.2, step=0.05, group=grp_form)
+
+grp_kz = "======= Killzones ======="
+use_killzones = input.bool(true, "Only signal in Killzones", group=grp_kz)
+kz_london     = input.bool(true, "London 02:00-05:00 NY", group=grp_kz)
+kz_ny         = input.bool(true, "New York 08:00-11:00 NY", group=grp_kz)
+kz_asia       = input.bool(false, "Asia 18:00-22:00 NY", group=grp_kz)
+
+green = input.color(#00ffbb, "Bullish", group="Appearance")
+red   = input.color(#ff1100, "Bearish", group="Appearance")
+t1    = input.int(90, "Body Transparency", maxval=100, group="Appearance")
+t2    = input.int(40, "Wick Transparency", maxval=100, group="Appearance")
+hide_expired_levels   = input.bool(true, "Hide Expired Levels", group="Appearance")
+hide_mitigated_levels = input.bool(false, "Hide Mitigated Levels", group="Appearance")
+show_dashboard        = input.bool(true, "Show Dashboard", group="Appearance")
+
+// ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// JOURNAL / BACKTEST — INPUTS
+// (the indicator keeps its own trade blotter: no strategy.* needed)
+// ═══════════════════════════════════════════════════════════════════
+grp_j = "======= Journal / Backtest ======="
+bt_on         = input.bool(true, "Enable journal", group=grp_j)
+bt_lookback   = input.int(0, "Lookback (bars, 0 = whole chart)", minval=0, maxval=20000, step=100, group=grp_j, tooltip="Only trades that resolved inside this many bars count toward the stats. 0 = every trade on the chart. The real ceiling is your plan's bar depth (5k free / 10k-20k paid).")
+bt_entry      = input.string("Next bar open", "Entry model", options=["Signal close", "Next bar open"], group=grp_j, tooltip="'Signal close' = fill at the close of the bar that fired the alert. 'Next bar open' = fill at the next bar's open (stricter, ignores nothing).")
+bt_max_hold   = input.int(48, "Max hold (bars)", minval=5, group=grp_j)
+bt_time_stop  = input.bool(true, "Time-stop at max hold", group=grp_j, tooltip="Close at the bar close (in R) once the trade has been open this long, so the sample is never padded with dead trades.")
+bt_tiebreak   = input.string("First-touch heuristic", "Same-bar TP & SL", options=["Count as loss", "Count as win", "First-touch heuristic"], group=grp_j, tooltip="When one bar's range covers both levels, Pine has no intrabar sequence. Choose how those trades are scored — the count is always reported.")
+bt_cost_r     = input.float(0.05, "Friction per trade (R)", minval=0.0, step=0.05, group=grp_j, tooltip="Fees + slippage charged as a fraction of 1R on every trade, win or lose.")
+bt_min_score  = input.int(1, "Journal only setups scoring >=", minval=1, maxval=5, group=grp_j)
+bt_dup_window = input.int(12, "Opposite-signal filter (bars)", minval=0, group=grp_j, tooltip="Ignore a signal of the opposite direction inside this many bars of the last one — a broker could never hold both.")
+bt_show_j     = input.bool(true, "Show journal table", group=grp_j)
+
+// ═══════════════════════════════════════════════════════════════════
+// APPLY PRESET
+// ═══════════════════════════════════════════════════════════════════
+float tolerence = tolerence_inp
+int   len = len_inp
+int   min_score_for_best = min_score_inp
+int   signal_cooldown = cooldown_inp
+float atr_mult_sl = atr_mult_sl_inp
+float near_atr_mult = near_mult_inp
+int   max_fvgs_per_side = max_fvgs_inp
+int   max_obs_per_side = max_obs_inp
+int   max_ifvgs = max_ifvg_inp
+
+if preset == "3min"
+    tolerence := 0.55
+    len := 8
+    min_score_for_best := 2
+    signal_cooldown := 5
+    atr_mult_sl := 0.40
+    near_atr_mult := 2.5
+    max_fvgs_per_side := 2
+    max_obs_per_side := 1
+    max_ifvgs := 1
+else if preset == "5min"
+    tolerence := 0.60
+    len := 10
+    min_score_for_best := 2
+    signal_cooldown := 6
+    atr_mult_sl := 0.35
+    near_atr_mult := 2.2
+    max_fvgs_per_side := 2
+    max_obs_per_side := 1
+    max_ifvgs := 1
+else if preset == "15min"
+    tolerence := 0.63
+    len := 11
+    min_score_for_best := 2
+    signal_cooldown := 7
+    atr_mult_sl := 0.30
+    near_atr_mult := 2.0
+    max_fvgs_per_side := 2
+    max_obs_per_side := 1
+    max_ifvgs := 1
+else if preset == "30min"
+    tolerence := 0.66
+    len := 12
+    min_score_for_best := 2
+    signal_cooldown := 9
+    atr_mult_sl := 0.28
+    near_atr_mult := 1.8
+    max_fvgs_per_side := 1
+    max_obs_per_side := 1
+    max_ifvgs := 1
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY LEVELS
+// ═══════════════════════════════════════════════════════════════════
+[pd_high, pd_low] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+ny_hour = hour(time, "America/New_York")
+
+isAsia   = ny_hour >= 18 or ny_hour < 2
+isLondon = ny_hour >= 2 and ny_hour < 8
+
+var float asiaHigh = na
+var float asiaLow  = na
+var float lonHigh  = na
+var float lonLow   = na
+var bool  asiaActive = false
+var bool  lonActive  = false
+
+if isAsia
+    if not asiaActive
+        asiaActive := true
+        asiaHigh   := high
+        asiaLow    := low
+    else
+        asiaHigh := math.max(asiaHigh, high)
+        asiaLow  := math.min(asiaLow, low)
+else
+    asiaActive := false
+
+if isLondon
+    if not lonActive
+        lonActive := true
+        lonHigh   := high
+        lonLow    := low
+    else
+        lonHigh := math.max(lonHigh, high)
+        lonLow  := math.min(lonLow, low)
+else
+    lonActive := false
+
+// ═══════════════════════════════════════════════════════════════════
+// SWING LIQUIDITY
+// ═══════════════════════════════════════════════════════════════════
+pivlow  = ta.pivotlow(len, len)
+pivhigh = ta.pivothigh(len, len)
+
+var line[] swinghighs = array.new_line()
+var line[] swinglows  = array.new_line()
+
+if not na(pivhigh)
+    array.unshift(swinghighs, line.new(bar_index-len, high[len], bar_index, high[len], color=color.new(chart.fg_color, 60)))
+if not na(pivlow)
+    array.unshift(swinglows, line.new(bar_index-len, low[len], bar_index, low[len], color=color.new(chart.fg_color, 60)))
+
+var float last_wicked_high_level = na
+var float last_wicked_low_level  = na
+
+bool wicked_high = false
+bool wicked_low  = false
+
+if array.size(swinghighs) > 0
+    for i = array.size(swinghighs)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(swinghighs)
+            continue
+        if i < array.size(swinghighs)
+            line l = array.get(swinghighs, i)
+            if bar_index - line.get_x1(l) < expiry_bars
+                float lvl = line.get_y1(l)
+                line.set_x2(l, bar_index)
+                if high >= lvl and barstate.isconfirmed
+                    if hide_mitigated_levels
+                        line.delete(l)
+                    array.remove(swinghighs, i)
+                    wicked_high := true
+                    last_wicked_high_level := lvl
+            else
+                if hide_expired_levels
+                    line.delete(l)
+                    array.remove(swinghighs, i)
+
+if array.size(swinglows) > 0
+    for i = array.size(swinglows)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(swinglows)
+            continue
+        if i < array.size(swinglows)
+            line l = array.get(swinglows, i)
+            if bar_index - line.get_x1(l) < expiry_bars
+                float lvl = line.get_y1(l)
+                line.set_x2(l, bar_index)
+                if low <= lvl and barstate.isconfirmed
+                    if hide_mitigated_levels
+                        line.delete(l)
+                    array.remove(swinglows, i)
+                    wicked_low := true
+                    last_wicked_low_level := lvl
+            else
+                if hide_expired_levels
+                    line.delete(l)
+                    array.remove(swinglows, i)
+
+while array.size(swinghighs) > 40
+    line.delete(array.pop(swinghighs))
+while array.size(swinglows) > 40
+    line.delete(array.pop(swinglows))
+
+int bars_since_high = ta.barssince(wicked_high)
+int bars_since_low  = ta.barssince(wicked_low)
+
+// ═══════════════════════════════════════════════════════════════════
+// LIVE ZONES – STRICT
+// ═══════════════════════════════════════════════════════════════════
+float atr = ta.atr(14)
+float near_dist = atr * near_atr_mult
+float min_fvg_size = atr * min_fvg_atr
+
+bool bull_fvg = low > high[2] and (low - high[2]) >= min_fvg_size
+bool bear_fvg = high < low[2] and (low[2] - high) >= min_fvg_size
+
+var box[]   live_bull_fvgs   = array.new_box()
+var box[]   live_bear_fvgs   = array.new_box()
+var box[]   live_bull_obs    = array.new_box()
+var box[]   live_bear_obs    = array.new_box()
+var box[]   live_ifvgs       = array.new_box()
+var label[] live_fvg_labels  = array.new_label()
+var label[] live_ob_labels   = array.new_label()
+var label[] live_ifvg_labels = array.new_label()
+
+var float last_bull_fvg_top    = na
+var float last_bull_fvg_bottom = na
+var int   last_bull_fvg_bar    = na
+var float last_bear_fvg_top    = na
+var float last_bear_fvg_bottom = na
+var int   last_bear_fvg_bar    = na
+
+var int last_bull_ob_created = 0
+var int last_bear_ob_created = 0
+var int last_fvg_created     = 0
+
+is_near(float top, float bottom) =>
+    not only_near_price or math.abs(close - (top + bottom)/2) <= near_dist
+
+if bull_fvg and show_live_fvgs and is_near(low, high[2]) and bar_index - last_fvg_created > 3
+    box b = box.new(bar_index-2, low, bar_index+12, high[2], bgcolor=color.new(green, fvg_transparency), border_color=color.new(green, 60), border_width=1)
+    array.unshift(live_bull_fvgs, b)
+    label lb = label.new(bar_index-1, (low+high[2])/2, "FVG", style=label.style_label_left, color=color.new(green, 80), textcolor=color.white, size=size.tiny)
+    array.unshift(live_fvg_labels, lb)
+    last_bull_fvg_top := low
+    last_bull_fvg_bottom := high[2]
+    last_bull_fvg_bar := bar_index
+    last_fvg_created := bar_index
+
+if bear_fvg and show_live_fvgs and is_near(low[2], high) and bar_index - last_fvg_created > 3
+    box b = box.new(bar_index-2, low[2], bar_index+12, high, bgcolor=color.new(red, fvg_transparency), border_color=color.new(red, 60), border_width=1)
+    array.unshift(live_bear_fvgs, b)
+    label lb = label.new(bar_index-1, (low[2]+high)/2, "FVG", style=label.style_label_left, color=color.new(red, 80), textcolor=color.white, size=size.tiny)
+    array.unshift(live_fvg_labels, lb)
+    last_bear_fvg_top := low[2]
+    last_bear_fvg_bottom := high
+    last_bear_fvg_bar := bar_index
+    last_fvg_created := bar_index
+
+if array.size(live_bull_fvgs) > 0
+    for i = array.size(live_bull_fvgs)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(live_bull_fvgs)
+            continue
+        box b = array.get(live_bull_fvgs, i)
+        box.set_right(b, bar_index+3)
+        if low < box.get_bottom(b) or not is_near(box.get_top(b), box.get_bottom(b))
+            box.delete(b)
+            array.remove(live_bull_fvgs, i)
+            if i < array.size(live_fvg_labels)
+                label.delete(array.get(live_fvg_labels, i))
+                array.remove(live_fvg_labels, i)
+
+if array.size(live_bear_fvgs) > 0
+    for i = array.size(live_bear_fvgs)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(live_bear_fvgs)
+            continue
+        box b = array.get(live_bear_fvgs, i)
+        box.set_right(b, bar_index+3)
+        if high > box.get_top(b) or not is_near(box.get_top(b), box.get_bottom(b))
+            box.delete(b)
+            array.remove(live_bear_fvgs, i)
+            if i < array.size(live_fvg_labels)
+                label.delete(array.get(live_fvg_labels, i))
+                array.remove(live_fvg_labels, i)
+
+while array.size(live_bull_fvgs) > max_fvgs_per_side
+    box.delete(array.pop(live_bull_fvgs))
+    if array.size(live_fvg_labels) > 0
+        label.delete(array.pop(live_fvg_labels))
+while array.size(live_bear_fvgs) > max_fvgs_per_side
+    box.delete(array.pop(live_bear_fvgs))
+    if array.size(live_fvg_labels) > 0
+        label.delete(array.pop(live_fvg_labels))
+
+bool bull_ifvg = not na(last_bull_fvg_bar) and bar_index - last_bull_fvg_bar <= 12 and close < last_bull_fvg_bottom
+bool bear_ifvg = not na(last_bear_fvg_bar) and bar_index - last_bear_fvg_bar <= 12 and close > last_bear_fvg_top
+
+if bull_ifvg and show_live_ifvgs and array.size(live_ifvgs) == 0
+    box b = box.new(bar_index-1, last_bear_fvg_bottom, bar_index+8, last_bear_fvg_top, bgcolor=color.new(green, 65), border_color=color.new(green, 25), border_width=2)
+    array.unshift(live_ifvgs, b)
+    label lb = label.new(bar_index, (last_bear_fvg_bottom + last_bear_fvg_top)/2, "iFVG", style=label.style_label_left, color=color.new(green, 50), textcolor=color.white, size=size.tiny)
+    array.unshift(live_ifvg_labels, lb)
+
+if bear_ifvg and show_live_ifvgs and array.size(live_ifvgs) == 0
+    box b = box.new(bar_index-1, last_bull_fvg_bottom, bar_index+8, last_bull_fvg_top, bgcolor=color.new(red, 65), border_color=color.new(red, 25), border_width=2)
+    array.unshift(live_ifvgs, b)
+    label lb = label.new(bar_index, (last_bull_fvg_bottom + last_bull_fvg_top)/2, "iFVG", style=label.style_label_left, color=color.new(red, 50), textcolor=color.white, size=size.tiny)
+    array.unshift(live_ifvg_labels, lb)
+
+while array.size(live_ifvgs) > max_ifvgs
+    box.delete(array.pop(live_ifvgs))
+    if array.size(live_ifvg_labels) > 0
+        label.delete(array.pop(live_ifvg_labels))
+
+var float last_bull_ob_high = na
+var float last_bull_ob_low  = na
+var int   last_bull_ob_bar  = na
+var float last_bear_ob_high = na
+var float last_bear_ob_low  = na
+var int   last_bear_ob_bar  = na
+
+bool can_create_bull_ob = bar_index - last_bull_ob_created > 6
+bool can_create_bear_ob = bar_index - last_bear_ob_created > 6
+
+if close > open and close[1] < open[1] and show_live_obs and can_create_bull_ob and is_near(high[1], low[1])
+    if array.size(live_bull_obs) > 0
+        for i = array.size(live_bull_obs)-1 to 0
+            // clamped: a counted for takes its direction from start vs end, so an
+            // empty bound still runs the body once with a bad index — skip it
+            if i < 0 or i >= array.size(live_bull_obs)
+                continue
+            box.delete(array.get(live_bull_obs, i))
+            array.remove(live_bull_obs, i)
+        if array.size(live_ob_labels) > 0
+            for i = array.size(live_ob_labels)-1 to 0
+                // clamped: a counted for takes its direction from start vs end, so an
+                // empty bound still runs the body once with a bad index — skip it
+                if i < 0 or i >= array.size(live_ob_labels)
+                    continue
+                label.delete(array.get(live_ob_labels, i))
+                array.remove(live_ob_labels, i)
+    last_bull_ob_high := high[1]
+    last_bull_ob_low  := low[1]
+    last_bull_ob_bar  := bar_index[1]
+    last_bull_ob_created := bar_index
+    box b = box.new(bar_index[1], high[1], bar_index+12, low[1], bgcolor=color.new(green, ob_transparency), border_color=color.new(green, 50))
+    array.unshift(live_bull_obs, b)
+    label lb = label.new(bar_index[1]+1, (high[1]+low[1])/2, "OB", style=label.style_label_left, color=color.new(green, 60), textcolor=color.white, size=size.tiny)
+    array.unshift(live_ob_labels, lb)
+
+if close < open and close[1] > open[1] and show_live_obs and can_create_bear_ob and is_near(high[1], low[1])
+    if array.size(live_bear_obs) > 0
+        for i = array.size(live_bear_obs)-1 to 0
+            // clamped: a counted for takes its direction from start vs end, so an
+            // empty bound still runs the body once with a bad index — skip it
+            if i < 0 or i >= array.size(live_bear_obs)
+                continue
+            box.delete(array.get(live_bear_obs, i))
+            array.remove(live_bear_obs, i)
+        if array.size(live_ob_labels) > 0
+            for i = array.size(live_ob_labels)-1 to 0
+                // clamped: a counted for takes its direction from start vs end, so an
+                // empty bound still runs the body once with a bad index — skip it
+                if i < 0 or i >= array.size(live_ob_labels)
+                    continue
+                label.delete(array.get(live_ob_labels, i))
+                array.remove(live_ob_labels, i)
+    last_bear_ob_high := high[1]
+    last_bear_ob_low  := low[1]
+    last_bear_ob_bar  := bar_index[1]
+    last_bear_ob_created := bar_index
+    box b = box.new(bar_index[1], high[1], bar_index+12, low[1], bgcolor=color.new(red, ob_transparency), border_color=color.new(red, 50))
+    array.unshift(live_bear_obs, b)
+    label lb = label.new(bar_index[1]+1, (high[1]+low[1])/2, "OB", style=label.style_label_left, color=color.new(red, 60), textcolor=color.white, size=size.tiny)
+    array.unshift(live_ob_labels, lb)
+
+if array.size(live_bull_obs) > 0
+    for i = array.size(live_bull_obs)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(live_bull_obs)
+            continue
+        box b = array.get(live_bull_obs, i)
+        box.set_right(b, bar_index+2)
+        if close < box.get_bottom(b) or not is_near(box.get_top(b), box.get_bottom(b))
+            box.delete(b)
+            array.remove(live_bull_obs, i)
+            if i < array.size(live_ob_labels)
+                label.delete(array.get(live_ob_labels, i))
+                array.remove(live_ob_labels, i)
+
+if array.size(live_bear_obs) > 0
+    for i = array.size(live_bear_obs)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(live_bear_obs)
+            continue
+        box b = array.get(live_bear_obs, i)
+        box.set_right(b, bar_index+2)
+        if close > box.get_top(b) or not is_near(box.get_top(b), box.get_bottom(b))
+            box.delete(b)
+            array.remove(live_bear_obs, i)
+            if i < array.size(live_ob_labels)
+                label.delete(array.get(live_ob_labels, i))
+                array.remove(live_ob_labels, i)
+
+// ═══════════════════════════════════════════════════════════════════
+// PREMIUM / DISCOUNT + HTF + KILLZONE
+// ═══════════════════════════════════════════════════════════════════
+float recent_high = ta.highest(high, 25)
+float recent_low  = ta.lowest(low, 25)
+float equilibrium = (recent_high + recent_low) / 2
+bool in_discount = close < equilibrium
+bool in_premium  = close > equilibrium
+
+float htf_close = request.security(syminfo.tickerid, htf_tf, close[1], lookahead = barmerge.lookahead_on)
+float htf_ema   = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50)[1], lookahead = barmerge.lookahead_on)
+bool htf_bull  = htf_close > htf_ema
+bool htf_bear  = htf_close < htf_ema
+
+bool in_london_kz = kz_london and ny_hour >= 2 and ny_hour < 5
+bool in_ny_kz     = kz_ny and ny_hour >= 8 and ny_hour < 11
+bool in_asia_kz   = kz_asia and (ny_hour >= 18 and ny_hour < 22)
+bool in_killzone  = not use_killzones or in_london_kz or in_ny_kz or in_asia_kz
+
+// ═══════════════════════════════════════════════════════════════════
+// JOURNAL ENGINE — state + helpers
+//   j_* = open trades   h_* = closed trade history   SI/SF = stat slots
+// ═══════════════════════════════════════════════════════════════════
+var float[]  j_ep    = array.new_float()
+var float[]  j_sl    = array.new_float()
+var float[]  j_tp    = array.new_float()
+var float[]  j_risk  = array.new_float()
+var int[]    j_dir   = array.new_int()
+var int[]    j_bar   = array.new_int()
+var int[]    j_act   = array.new_int()
+var float[]  j_mfe   = array.new_float()
+var float[]  j_mae   = array.new_float()
+var int[]    j_score = array.new_int()
+var string[] j_grade = array.new_string()
+var int[]    j_kz    = array.new_int()
+
+var float[]  h_r     = array.new_float()
+var float[]  h_net   = array.new_float()
+var int[]    h_hold  = array.new_int()
+var int[]    h_bar   = array.new_int()
+var int[]    h_time  = array.new_int()
+var int[]    h_score = array.new_int()
+var int[]    h_amb   = array.new_int()
+var int[]    h_ts    = array.new_int()
+var float[]  h_mfe   = array.new_float()
+var float[]  h_mae   = array.new_float()
+var int[]    h_dir   = array.new_int()
+var int[]    h_kz    = array.new_int()
+
+// SI: 0 n, 1 wins, 2 ambiguous, 3 timeStops, 4 longestWin, 5 longestLoss,
+//     6 s2n, 7 s2w, 8 s3n, 9 s3w, 10 s4n, 11 s4w, 12 holdSum, 13 openNow,
+//     14 rejectedFill, 15 dupFiltered, 16 lastSigBar+1, 17 lastSigDir,
+//     18 bullN, 19 bullW, 20 bearN, 21 bearW, 22 closedLifetime, 23 spanDays
+var int[]   SI = array.new_int(24, 0)
+// SF: 0 sumNet, 1 sumSq, 2 maxDD, 3 best, 4 worst, 5 grossWin,
+//     6 grossLoss, 7 mfeSum, 8 maeSum, 9 openDD
+var float[] SF = array.new_float(10, 0.0)
+
+// a candidate published by the BEST block, consumed by the engine on the same bar
+var bool   sig_pending = false
+var int    sig_dir     = 0
+var float  sig_ep      = 0.0
+var float  sig_sl      = 0.0
+var string sig_grade   = ""
+var int    sig_score   = 0
+var int    sig_kz      = 0
+
+// a candidate waiting for the next bar's open
+var bool   p_on    = false
+var int    p_dir   = 0
+var float  p_sl    = 0.0
+var string p_grade = ""
+var int    p_score = 0
+var int    p_kz    = 0
+
+f_kz() =>
+    int kz = 0
+    if in_london_kz
+        kz := 1
+    else if in_ny_kz
+        kz := 2
+    else if in_asia_kz
+        kz := 3
+    kz
+
+f_open(int dir, float ep, float sl_p, string gr, int sc, int kz) =>
+    float risk = math.abs(ep - sl_p)
+    float tp_p = dir == -1 ? ep - risk * rr_target : ep + risk * rr_target
+    int ok = risk >= syminfo.mintick * 2 ? 1 : 0
+    if ok == 1
+        array.push(j_ep, ep)
+        array.push(j_sl, sl_p)
+        array.push(j_tp, tp_p)
+        array.push(j_risk, risk)
+        array.push(j_dir, dir)
+        array.push(j_bar, bar_index)
+        array.push(j_act, 1)
+        array.push(j_mfe, 0.0)
+        array.push(j_mae, 0.0)
+        array.push(j_score, sc)
+        array.push(j_grade, gr)
+        array.push(j_kz, kz)
+    ok
+
+f_close(int i, float res, int amb, int ts) =>
+    array.push(h_r, res)
+    array.push(h_net, res - bt_cost_r)
+    array.push(h_hold, math.max(bar_index - array.get(j_bar, i), 1))
+    array.push(h_bar, bar_index)
+    array.push(h_time, time)
+    array.push(h_score, array.get(j_score, i))
+    array.push(h_amb, amb)
+    array.push(h_ts, ts)
+    array.push(h_mfe, array.get(j_mfe, i))
+    array.push(h_mae, array.get(j_mae, i))
+    array.push(h_dir, array.get(j_dir, i))
+    array.push(h_kz, array.get(j_kz, i))
+    array.set(j_act, i, 0)
+    array.set(SI, 22, array.get(SI, 22) + 1)
+
+f_drop(int i) =>
+    array.remove(j_ep, i)
+    array.remove(j_sl, i)
+    array.remove(j_tp, i)
+    array.remove(j_risk, i)
+    array.remove(j_dir, i)
+    array.remove(j_bar, i)
+    array.remove(j_act, i)
+    array.remove(j_mfe, i)
+    array.remove(j_mae, i)
+    array.remove(j_score, i)
+    array.remove(j_grade, i)
+    array.remove(j_kz, i)
+
+f_trim() =>
+    while array.size(h_r) > 4000
+        array.remove(h_r, 0)
+        array.remove(h_net, 0)
+        array.remove(h_hold, 0)
+        array.remove(h_bar, 0)
+        array.remove(h_time, 0)
+        array.remove(h_score, 0)
+        array.remove(h_amb, 0)
+        array.remove(h_ts, 0)
+        array.remove(h_mfe, 0)
+        array.remove(h_mae, 0)
+        array.remove(h_dir, 0)
+        array.remove(h_kz, 0)
+
+// One bar that spans both levels has no defined order without intrabar data.
+// Nearest-to-the-open wins; the trade is flagged ambiguous either way.
+f_first_touch(int dir, float o, float tp_p, float sl_p, float hh, float ll) =>
+    float d_tp = math.abs(tp_p - o)
+    float d_sl = math.abs(sl_p - o)
+    bool inside = o < tp_p and o > sl_p
+    bool r = false
+    if not inside or d_tp < syminfo.mintick or d_sl < syminfo.mintick
+        r := false
+    else if dir == 1
+        r := d_tp / math.max(hh - o, syminfo.mintick) < d_sl / math.max(o - ll, syminfo.mintick)
+    else
+        r := d_tp / math.max(o - ll, syminfo.mintick) < d_sl / math.max(hh - o, syminfo.mintick)
+    r
+
+f_stats() =>
+    int m = array.size(h_r)
+    int first_i = 0
+    if bt_lookback > 0 and m > 0
+        for i = m - 1 to 0
+            // clamped: a counted for takes its direction from start vs end, so an
+            // empty bound still runs the body once with a bad index — skip it
+            if i < 0 or i >= 0
+                continue
+            if bar_index - array.get(h_bar, i) > bt_lookback
+                first_i := i + 1
+                break
+    int n = 0
+    int wins = 0
+    int amb = 0
+    int tstop = 0
+    int maxw = 0
+    int maxl = 0
+    int s2n = 0
+    int s2w = 0
+    int s3n = 0
+    int s3w = 0
+    int s4n = 0
+    int s4w = 0
+    int hold_sum = 0
+    int bull_n = 0
+    int bull_w = 0
+    int bear_n = 0
+    int bear_w = 0
+    float sum_net = 0.0
+    float sum_sq = 0.0
+    float gwin = 0.0
+    float gloss = 0.0
+    float mfe_sum = 0.0
+    float mae_sum = 0.0
+    float cum = 0.0
+    float peak = 0.0
+    float dd = 0.0
+    float best = 0.0
+    float worst = 0.0
+    int streak = 0
+    for i = first_i to m - 1
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(h_amb)
+            continue
+        float net = array.get(h_net, i)
+        int sc = array.get(h_score, i)
+        if n == 0
+            best := net
+            worst := net
+        n += 1
+        sum_net += net
+        sum_sq += net * net
+        cum += net
+        peak := math.max(peak, cum)
+        dd := math.max(dd, peak - cum)
+        best := math.max(best, net)
+        worst := math.min(worst, net)
+        gwin += math.max(net, 0.0)
+        gloss += math.abs(math.min(net, 0.0))
+        mfe_sum += array.get(h_mfe, i)
+        mae_sum += array.get(h_mae, i)
+        hold_sum += array.get(h_hold, i)
+        amb += array.get(h_amb, i)
+        tstop += array.get(h_ts, i)
+        bool is_win = net > 0.0
+        if is_win
+            wins += 1
+            streak := streak > 0 ? streak + 1 : 1
+            maxw := math.max(maxw, streak)
+        else
+            streak := streak < 0 ? streak - 1 : -1
+            maxl := math.max(maxl, -streak)
+        if sc >= 2
+            s2n += 1
+            if is_win
+                s2w += 1
+        if sc >= 3
+            s3n += 1
+            if is_win
+                s3w += 1
+        if sc >= 4
+            s4n += 1
+            if is_win
+                s4w += 1
+        if array.get(h_dir, i) == 1
+            bull_n += 1
+            if is_win
+                bull_w += 1
+        else
+            bear_n += 1
+            if is_win
+                bear_w += 1
+    array.set(SI, 0, n)
+    array.set(SI, 1, wins)
+    array.set(SI, 2, amb)
+    array.set(SI, 3, tstop)
+    array.set(SI, 4, maxw)
+    array.set(SI, 5, maxl)
+    array.set(SI, 6, s2n)
+    array.set(SI, 7, s2w)
+    array.set(SI, 8, s3n)
+    array.set(SI, 9, s3w)
+    array.set(SI, 10, s4n)
+    array.set(SI, 11, s4w)
+    array.set(SI, 12, hold_sum)
+    array.set(SI, 13, array.size(j_act))
+    array.set(SI, 18, bull_n)
+    array.set(SI, 19, bull_w)
+    array.set(SI, 20, bear_n)
+    array.set(SI, 21, bear_w)
+    int span = n > 0 ? int((array.get(h_time, m - 1) - array.get(h_time, first_i)) / 86400000.0) : 0
+    array.set(SI, 23, span)
+    array.set(SF, 0, sum_net)
+    array.set(SF, 1, sum_sq)
+    array.set(SF, 2, dd)
+    array.set(SF, 3, best)
+    array.set(SF, 4, worst)
+    array.set(SF, 5, gwin)
+    array.set(SF, 6, gloss)
+    array.set(SF, 7, mfe_sum)
+    array.set(SF, 8, mae_sum)
+    array.set(SF, 9, math.max(peak - cum, 0.0))
+
+// ═══════════════════════════════════════════════════════════════════
+// CISD CORE
+// ═══════════════════════════════════════════════════════════════════
+var float[] bear_potential = array.new_float()
+var float[] bull_potential = array.new_float()
+
+if close[1] < open[1] and close > open
+    array.unshift(bear_potential, bar_index)
+    array.unshift(bear_potential, open)
+if close[1] > open[1] and close < open
+    array.unshift(bull_potential, bar_index)
+    array.unshift(bull_potential, open)
+
+int cisd = 0
+float origin_lvl = 0.0
+float origin_idx = 0.0
+float cisd_ratio = 0.0
+
+if array.size(bear_potential) > 0
+    bool inloop = true
+    while inloop
+        if close < array.first(bear_potential)
+            float highest = 0.0
+            for i = 0 to bar_index - array.get(bear_potential, 1)
+                highest := math.max(highest, close[i])
+            bool running = true
+            int init = bar_index - int(array.get(bear_potential, 1)) + 1
+            float top = 0.0
+            while running
+                if close[init] < open[init]
+                    top := open[init]
+                    init += 1
+                else
+                    running := false
+            float ratio = (highest - array.first(bear_potential)) / math.max(top - array.first(bear_potential), syminfo.mintick)
+            if ratio > tolerence
+                origin_lvl := array.first(bear_potential)
+                origin_idx := array.get(bear_potential, 1)
+                cisd_ratio := ratio
+                array.clear(bear_potential)
+                cisd := 1
+                inloop := false
+            else
+                array.shift(bear_potential)
+                array.shift(bear_potential)
+                if array.size(bear_potential) == 0
+                    inloop := false
+        else
+            inloop := false
+
+if array.size(bull_potential) > 0
+    bool inloop = true
+    while inloop
+        if close > array.first(bull_potential)
+            float lowest = close
+            for i = 0 to bar_index - array.get(bull_potential, 1)
+                lowest := math.min(lowest, close[i])
+            bool running = true
+            int init = bar_index - int(array.get(bull_potential, 1)) + 1
+            float bottom = 0.0
+            while running
+                if close[init] > open[init]
+                    bottom := open[init]
+                    init += 1
+                else
+                    running := false
+            float ratio = (array.first(bull_potential) - lowest) / math.max(array.first(bull_potential) - bottom, syminfo.mintick)
+            if ratio > tolerence
+                origin_lvl := array.first(bull_potential)
+                origin_idx := array.get(bull_potential, 1)
+                cisd_ratio := ratio
+                array.clear(bull_potential)
+                cisd := 2
+                inloop := false
+            else
+                array.shift(bull_potential)
+                array.shift(bull_potential)
+                if array.size(bull_potential) == 0
+                    inloop := false
+        else
+            inloop := false
+
+// ═══════════════════════════════════════════════════════════════════
+// BEST SIGNAL + SMART TARGETS + ALERTS
+// ═══════════════════════════════════════════════════════════════════
+var int trend = 0
+var int last_signal_bar = 0
+
+var line[]   active_origin_lines = array.new_line()
+var line[]   active_entry_lines  = array.new_line()
+var line[]   active_sl_lines     = array.new_line()
+var line[]   active_tp_lines     = array.new_line()
+var line[]   active_liq_lines    = array.new_line()
+var label[]  active_labels       = array.new_label()
+var label[]  active_liq_labels   = array.new_label()
+var float[]  active_origins      = array.new_float()
+var int[]    active_dirs         = array.new_int()
+var int[]    active_bars         = array.new_int()
+
+bool bearish_sweep = false
+bool bullish_sweep = false
+bool best_bear = false
+bool best_bull = false
+int score = 0
+string grade = ""
+
+bool can_signal = (bar_index - last_signal_bar >= signal_cooldown) and in_killzone
+float body_pct = math.abs(close - open) / math.max(high - low, syminfo.mintick)
+
+// hoisted: a ta.* call inside an if/else only updates on the bars that take that
+// branch, so its series is not comparable across bars (CONDITIONAL_SERIES).
+liqHi18 = ta.highest(high, 18)
+liqLo18 = ta.lowest(low, 18)
+
+get_liq_target(bool is_bull) =>
+    float target = na
+    string name = ""
+    if is_bull
+        if not na(pd_high) and pd_high > close
+            target := pd_high
+            name := "PDH"
+        else if not na(asiaHigh) and asiaHigh > close
+            target := asiaHigh
+            name := "Asia H"
+        else if not na(lonHigh) and lonHigh > close
+            target := lonHigh
+            name := "Lon H"
+        else
+            target := liqHi18
+            name := "Swing H"
+    else
+        if not na(pd_low) and pd_low < close
+            target := pd_low
+            name := "PDL"
+        else if not na(asiaLow) and asiaLow < close
+            target := asiaLow
+            name := "Asia L"
+        else if not na(lonLow) and lonLow < close
+            target := lonLow
+            name := "Lon L"
+        else
+            target := liqLo18
+            name := "Swing L"
+    [target, name]
+
+if cisd == 1 and can_signal
+    trend := -1
+    bool liq_ok  = bars_since_high <= liquidity_lookback and close < nz(last_wicked_high_level, high)
+    bool fvg_ok  = (not na(last_bear_fvg_bar) and bar_index - last_bear_fvg_bar <= 10) or bear_fvg or bear_ifvg
+    bool ifvg_ok = bear_ifvg
+    bool disp_ok = cisd_ratio >= strong_disp_mult
+    bool htf_ok  = htf_bear
+    bool ob_ok   = not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= 12 and close <= last_bear_ob_high
+    bool pd_ok   = in_premium
+    bool body_ok = body_pct >= body_pct_min
+
+    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0)
+    grade := score >= 4 ? "A+" : score >= 3 ? "A" : score == 2 ? "B" : "C"
+
+    if liq_ok
+        bearish_sweep := true
+
+    bool filters_ok = (not require_liq_sweep or liq_ok) and (not require_fvg or fvg_ok) and (not require_strong_disp or disp_ok) and (not require_htf_bias or htf_ok) and (not require_ob or ob_ok) and (not require_prem_disc or pd_ok) and (not require_body_pct or body_ok) and (not require_ifvg or ifvg_ok)
+    best_bear := filters_ok and score >= min_score_for_best
+
+    if best_bear
+        last_signal_bar := bar_index
+        int line_width = score >= 3 ? 5 : 3
+        line origin_line = line.new(int(origin_idx), origin_lvl, bar_index, origin_lvl, color=red, width=line_width)
+        array.push(active_origin_lines, origin_line)
+        array.push(active_origins, origin_lvl)
+        array.push(active_dirs, -1)
+        array.push(active_bars, bar_index)
+
+        string star = score >= 3 ? "★ " : ""
+        label lbl = label.new(bar_index, high, star + "BEST " + grade + " ▼", style=label.style_label_down, color=red, textcolor=color.white, size=size.normal)
+        array.push(active_labels, lbl)
+
+        if show_risk_levels
+            float entry = close
+            float sl = high + atr * atr_mult_sl
+            float tp = entry - (sl - entry) * rr_target
+            array.push(active_entry_lines, line.new(bar_index, entry, bar_index+12, entry, color=color.white, width=1, style=line.style_dotted))
+            array.push(active_sl_lines, line.new(bar_index, sl, bar_index+12, sl, color=red, width=1))
+            array.push(active_tp_lines, line.new(bar_index, tp, bar_index+12, tp, color=green, width=1))
+
+        if show_liquidity_tgt
+            [tgt, tgt_name] = get_liq_target(false)
+            if not na(tgt)
+                line liq = line.new(bar_index, tgt, bar_index+25, tgt, color=color.new(red, 25), width=2, style=line.style_dashed)
+                array.push(active_liq_lines, liq)
+                label liq_lbl = label.new(bar_index+25, tgt, tgt_name, style=label.style_label_left, color=color.new(red, 65), textcolor=color.white, size=size.small)
+                array.push(active_liq_labels, liq_lbl)
+
+        alert("BEST BEARISH " + grade + " | Score: " + str.tostring(score) + " | " + preset + " | " + syminfo.ticker, alert.freq_once_per_bar)
+
+        // ── journal: publish this candidate; the engine applies the gates ──
+        sig_pending := true
+        sig_dir := -1
+        sig_ep := close
+        sig_sl := high + atr * atr_mult_sl
+        sig_grade := grade
+        sig_score := score
+        sig_kz := f_kz()
+
+if cisd == 2 and can_signal
+    trend := 1
+    bool liq_ok  = bars_since_low <= liquidity_lookback and close > nz(last_wicked_low_level, low)
+    bool fvg_ok  = (not na(last_bull_fvg_bar) and bar_index - last_bull_fvg_bar <= 10) or bull_fvg or bull_ifvg
+    bool ifvg_ok = bull_ifvg
+    bool disp_ok = cisd_ratio >= strong_disp_mult
+    bool htf_ok  = htf_bull
+    bool ob_ok   = not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= 12 and close >= last_bull_ob_low
+    bool pd_ok   = in_discount
+    bool body_ok = body_pct >= body_pct_min
+
+    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0)
+    grade := score >= 4 ? "A+" : score >= 3 ? "A" : score == 2 ? "B" : "C"
+
+    if liq_ok
+        bullish_sweep := true
+
+    bool filters_ok = (not require_liq_sweep or liq_ok) and (not require_fvg or fvg_ok) and (not require_strong_disp or disp_ok) and (not require_htf_bias or htf_ok) and (not require_ob or ob_ok) and (not require_prem_disc or pd_ok) and (not require_body_pct or body_ok) and (not require_ifvg or ifvg_ok)
+    best_bull := filters_ok and score >= min_score_for_best
+
+    if best_bull
+        last_signal_bar := bar_index
+        int line_width = score >= 3 ? 5 : 3
+        line origin_line = line.new(int(origin_idx), origin_lvl, bar_index, origin_lvl, color=green, width=line_width)
+        array.push(active_origin_lines, origin_line)
+        array.push(active_origins, origin_lvl)
+        array.push(active_dirs, 1)
+        array.push(active_bars, bar_index)
+
+        string star = score >= 3 ? "★ " : ""
+        label lbl = label.new(bar_index, low, star + "BEST " + grade + " ▲", style=label.style_label_up, color=green, textcolor=color.white, size=size.normal)
+        array.push(active_labels, lbl)
+
+        if show_risk_levels
+            float entry = close
+            float sl = low - atr * atr_mult_sl
+            float tp = entry + (entry - sl) * rr_target
+            array.push(active_entry_lines, line.new(bar_index, entry, bar_index+12, entry, color=color.white, width=1, style=line.style_dotted))
+            array.push(active_sl_lines, line.new(bar_index, sl, bar_index+12, sl, color=red, width=1))
+            array.push(active_tp_lines, line.new(bar_index, tp, bar_index+12, tp, color=green, width=1))
+
+        if show_liquidity_tgt
+            [tgt, tgt_name] = get_liq_target(true)
+            if not na(tgt)
+                line liq = line.new(bar_index, tgt, bar_index+25, tgt, color=color.new(green, 25), width=2, style=line.style_dashed)
+                array.push(active_liq_lines, liq)
+                label liq_lbl = label.new(bar_index+25, tgt, tgt_name, style=label.style_label_left, color=color.new(green, 65), textcolor=color.white, size=size.small)
+                array.push(active_liq_labels, liq_lbl)
+
+        alert("BEST BULLISH " + grade + " | Score: " + str.tostring(score) + " | " + preset + " | " + syminfo.ticker, alert.freq_once_per_bar)
+
+        // ── journal: publish the candidate; the engine applies the gates ──
+        sig_pending := true
+        sig_dir := 1
+        sig_ep := close
+        sig_sl := low - atr * atr_mult_sl
+        sig_grade := grade
+        sig_score := score
+        sig_kz := f_kz()
+
+// Clean old signals
+if array.size(active_bars) > 0
+    for i = array.size(active_bars)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(active_bars)
+            continue
+        if bar_index - array.get(active_bars, i) > clean_after_bars
+            line.delete(array.get(active_origin_lines, i))
+            if i < array.size(active_entry_lines)
+                line.delete(array.get(active_entry_lines, i))
+                line.delete(array.get(active_sl_lines, i))
+                line.delete(array.get(active_tp_lines, i))
+            if i < array.size(active_liq_lines)
+                line.delete(array.get(active_liq_lines, i))
+            if i < array.size(active_labels)
+                label.delete(array.get(active_labels, i))
+            if i < array.size(active_liq_labels)
+                label.delete(array.get(active_liq_labels, i))
+            array.remove(active_origin_lines, i)
+            array.remove(active_origins, i)
+            array.remove(active_dirs, i)
+            array.remove(active_bars, i)
+            if i < array.size(active_entry_lines)
+                array.remove(active_entry_lines, i)
+                array.remove(active_sl_lines, i)
+                array.remove(active_tp_lines, i)
+            if i < array.size(active_liq_lines)
+                array.remove(active_liq_lines, i)
+            if i < array.size(active_labels)
+                array.remove(active_labels, i)
+            if i < array.size(active_liq_labels)
+                array.remove(active_liq_labels, i)
+
+// Auto-invalidation
+if auto_invalidate and array.size(active_origins) > 0
+    for i = array.size(active_origins)-1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an
+        // empty bound still runs the body once with a bad index — skip it
+        if i < 0 or i >= array.size(active_origins)
+            continue
+        int dir = array.get(active_dirs, i)
+        float orig = array.get(active_origins, i)
+        bool invalidated = (dir == 1 and close < orig) or (dir == -1 and close > orig)
+        if invalidated
+            line.delete(array.get(active_origin_lines, i))
+            if i < array.size(active_entry_lines)
+                line.delete(array.get(active_entry_lines, i))
+                line.delete(array.get(active_sl_lines, i))
+                line.delete(array.get(active_tp_lines, i))
+            if i < array.size(active_liq_lines)
+                line.delete(array.get(active_liq_lines, i))
+            if i < array.size(active_labels)
+                label.delete(array.get(active_labels, i))
+            if i < array.size(active_liq_labels)
+                label.delete(array.get(active_liq_labels, i))
+            array.remove(active_origin_lines, i)
+            array.remove(active_origins, i)
+            array.remove(active_dirs, i)
+            array.remove(active_bars, i)
+            if i < array.size(active_entry_lines)
+                array.remove(active_entry_lines, i)
+                array.remove(active_sl_lines, i)
+                array.remove(active_tp_lines, i)
+            if i < array.size(active_liq_lines)
+                array.remove(active_liq_lines, i)
+            if i < array.size(active_labels)
+                array.remove(active_labels, i)
+            if i < array.size(active_liq_labels)
+                array.remove(active_liq_labels, i)
+
+plotshape(bearish_sweep and not best_bear ? high : na, "Strong Bear", shape.labeldown, location.abovebar, color.new(red, 60), size=size.tiny, text="▼")
+plotshape(bullish_sweep and not best_bull ? low  : na, "Strong Bull", shape.labelup, location.belowbar, color.new(green, 60), size=size.tiny, text="▲")
+
+plotchar(not na(pivhigh) ? high[len] : na, "SH", "●", location.absolute, red, size=size.tiny, offset=-len)
+plotchar(not na(pivlow)  ? low[len]  : na, "SL", "●", location.absolute, green, size=size.tiny, offset=-len)
+
+color candle_col  = color.from_gradient(t1, 0, 100, trend > 0 ? green : red, chart.bg_color)
+color candle_col_ = color.from_gradient(t2, 0, 100, trend > 0 ? green : red, chart.bg_color)
+plotcandle(open, high, low, close, "Candles", candle_col, candle_col_, bordercolor=candle_col_)
+
+// Dashboard
+string analysis = ""
+if array.size(live_bull_fvgs) > 0 or array.size(live_bear_fvgs) > 0
+    analysis := "FVGs"
+if array.size(live_ifvgs) > 0
+    analysis := analysis + (analysis == "" ? "" : " + ") + "iFVG"
+if array.size(live_bull_obs) > 0 or array.size(live_bear_obs) > 0
+    analysis := analysis + (analysis == "" ? "" : " + ") + "OB"
+if analysis == ""
+    analysis := "Clear"
+
+if show_dashboard and barstate.islast
+    var table dash = table.new(position.top_right, 2, 11, bgcolor=color.new(#0d0d0d, 15), border_width=1)
+    table.cell(dash, 0, 0, "CISD Ultimate", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, preset, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 1, str.tostring(score) + " " + grade, text_color=score >= 3 ? green : score == 2 ? color.yellow : red, text_size=size.small)
+    table.cell(dash, 0, 2, "Analysis", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 2, analysis, text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, 3, "Live FVGs", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 3, str.tostring(array.size(live_bull_fvgs) + array.size(live_bear_fvgs)), text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, 4, "Live OBs", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 4, str.tostring(array.size(live_bull_obs) + array.size(live_bear_obs)), text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, 5, "iFVG", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 5, array.size(live_ifvgs) > 0 ? "ACTIVE" : "—", text_color=array.size(live_ifvgs) > 0 ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 6, "Prem/Disc", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 6, in_discount ? "Discount" : "Premium", text_color=in_discount ? green : red, text_size=size.tiny)
+    table.cell(dash, 0, 7, "HTF Bias", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 7, htf_bull ? "Bullish" : "Bearish", text_color=htf_bull ? green : red, text_size=size.tiny)
+    table.cell(dash, 0, 8, "Killzone", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 8, in_killzone ? "ACTIVE" : "Outside", text_color=in_killzone ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 9, "Ready", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 9, can_signal ? "YES" : "Cooldown", text_color=can_signal ? green : color.orange, text_size=size.tiny)
+    table.cell(dash, 0, 10, "Preset", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 10, preset, text_color=color.aqua, text_size=size.tiny)
+
+alertcondition(best_bear, "BEST Bearish CISD", "BEST Bearish CISD")
+alertcondition(best_bull, "BEST Bullish CISD", "BEST Bullish CISD")
+
+// ═══════════════════════════════════════════════════════════════════
+// JOURNAL ENGINE — walk-forward bookkeeping (runs on every bar)
+// ═══════════════════════════════════════════════════════════════════
+// 1 · fill the deferred candidate at this bar's open
+if bt_on and p_on
+    if f_open(p_dir, open, p_sl, p_grade, p_score, p_kz) == 0
+        array.set(SI, 14, array.get(SI, 14) + 1)
+    p_on := false
+
+// 2 · consume the candidate published by the BEST block on this bar
+if sig_pending
+    if bt_on and barstate.isconfirmed and sig_score >= bt_min_score
+        int prev_bar = array.get(SI, 16) - 1
+        bool dup = bt_dup_window > 0 and prev_bar >= 0 and bar_index - prev_bar <= bt_dup_window and sig_dir != array.get(SI, 17)
+        if dup
+            array.set(SI, 15, array.get(SI, 15) + 1)
+        else
+            array.set(SI, 16, bar_index + 1)
+            array.set(SI, 17, sig_dir)
+            if bt_entry == "Signal close"
+                if f_open(sig_dir, sig_ep, sig_sl, sig_grade, sig_score, sig_kz) == 0
+                    array.set(SI, 14, array.get(SI, 14) + 1)
+            else
+                p_on := true
+                p_dir := sig_dir
+                p_sl := sig_sl
+                p_grade := sig_grade
+                p_score := sig_score
+                p_kz := sig_kz
+    sig_pending := false
+
+// 3 · mark every open trade to this bar and settle it if a level was touched
+if bt_on
+    // safety valve: an unbounded list of never-touched trades would eat the calc budget
+    while array.size(j_act) > 200
+        f_drop(0)
+    int n_open = array.size(j_act)
+    if n_open > 0
+        for i = n_open - 1 to 0
+            // clamped: a counted for takes its direction from start vs end, so an
+            // empty bound still runs the body once with a bad index — skip it
+            if i < 0 or i >= 0
+                continue
+            if array.get(j_act, i) == 1
+                int   dir   = array.get(j_dir, i)
+                int   ob    = array.get(j_bar, i)
+                float ep    = array.get(j_ep, i)
+                float sl    = array.get(j_sl, i)
+                float tp    = array.get(j_tp, i)
+                float rk    = array.get(j_risk, i)
+                bool  ebar  = ob == bar_index
+                bool  quiet = ebar and bt_entry == "Signal close"
+                float eop   = ebar ? open : open[bar_index - ob]
+                float hh    = quiet ? ep : high
+                float ll    = quiet ? ep : low
+                bool  touch = not quiet
+                bool hit_tp = touch and (dir == 1 ? hh >= tp : ll <= tp)
+                bool hit_sl = touch and (dir == 1 ? ll <= sl : hh >= sl)
+                if hit_tp and hit_sl
+                    bool tp_first = false
+                    if bt_tiebreak == "Count as win"
+                        tp_first := true
+                    else if bt_tiebreak == "Count as loss"
+                        tp_first := false
+                    else
+                        tp_first := f_first_touch(dir, quiet ? ep : eop, tp, sl, hh, ll)
+                    f_close(i, tp_first ? rr_target : -1.0, 1, 0)
+                    f_drop(i)
+                else if hit_sl
+                    f_close(i, -1.0, 0, 0)
+                    f_drop(i)
+                else if hit_tp
+                    f_close(i, rr_target, 0, 0)
+                    f_drop(i)
+                else if bt_time_stop and bar_index - ob >= bt_max_hold
+                    f_close(i, (dir == 1 ? close - ep : ep - close) / rk, 0, 1)
+                    f_drop(i)
+                else
+                    array.set(j_mfe, i, math.max(array.get(j_mfe, i), (dir == 1 ? hh - ep : ep - ll) / rk))
+                    array.set(j_mae, i, math.min(array.get(j_mae, i), (dir == 1 ? ll - ep : ep - hh) / rk))
+    f_trim()
+    if barstate.islast
+        f_stats()
+
+// ═══════════════════════════════════════════════════════════════════
+// JOURNAL DISPLAY — 6 cols × 9 rows, 3 label/value pairs per row
+// ═══════════════════════════════════════════════════════════════════
+f_r(float x) =>
+    (x >= 0.0 ? "+" : "") + str.tostring(x, "#.##") + "R"
+
+f_pc(float num, float den) =>
+    den > 0.0 ? str.tostring(100.0 * num / den, "#.#") + "%" : "—"
+
+f_jcell(table t, int col, int row, string lbl, string val, color c, string tip) =>
+    table.cell(t, col, row, lbl, text_color=color.new(color.gray, 25), text_size=size.tiny, text_halign=text.align_right)
+    table.cell(t, col + 1, row, val, text_color=c, text_size=size.tiny, text_halign=text.align_left, tooltip=tip)
+
+if bt_on and bt_show_j and barstate.islast
+    int   n_t    = array.get(SI, 0)
+    int   w_t    = array.get(SI, 1)
+    bool  has    = n_t > 0
+    float be_win = 100.0 / (1.0 + rr_target)
+    float exp_r  = has ? array.get(SF, 0) / n_t : 0.0
+    float sd_r   = n_t > 1 ? math.sqrt(math.max(array.get(SF, 1) / n_t - exp_r * exp_r, 0.0)) : 0.0
+    float pf_g   = array.get(SF, 6) > 0.0 ? array.get(SF, 5) / array.get(SF, 6) : 0.0
+    float loss_n = n_t - w_t
+    float pf_n   = array.get(SF, 6) + bt_cost_r * loss_n > 0.0 ? (array.get(SF, 5) - bt_cost_r * w_t) / (array.get(SF, 6) + bt_cost_r * loss_n) : 0.0
+    string meta  = "Entry: " + bt_entry + " · lookback " + str.tostring(bt_lookback) + " bars · same-bar TP/SL → " + bt_tiebreak + " · rejected on fill " + str.tostring(array.get(SI, 14)) + " · dup-filtered " + str.tostring(array.get(SI, 15)) + " · lifetime closed " + str.tostring(array.get(SI, 22))
+    var table jt = table.new(position.bottom_left, 6, 9, bgcolor=color.new(#0d0d0d, 10), border_width=1, border_color=color.new(color.gray, 82), frame_color=color.new(color.gray, 70), frame_width=1)
+    f_jcell(jt, 0, 0, "CHART", timeframe.period + " · " + preset, color.gray, meta)
+    f_jcell(jt, 2, 0, "MODEL", bt_entry, color.gray, meta)
+    f_jcell(jt, 4, 0, "R:R / COST", "1:" + str.tostring(rr_target, "#.#") + " · " + str.tostring(bt_cost_r, "#.##") + "R", color.gray, meta)
+    f_jcell(jt, 0, 1, "SETUPS", str.tostring(n_t) + " (" + str.tostring(array.get(SI, 13)) + " open)", color.white, meta)
+    f_jcell(jt, 2, 1, "SPAN", has ? str.tostring(array.get(SI, 23)) + "d" : "—", color.gray, meta)
+    f_jcell(jt, 4, 1, "BE WIN%", str.tostring(be_win, "#.#") + "%", color.aqua, "Win rate needed to break even at this R:R = 1 / (1 + R). Above it is edge, below it is a slow bleed.")
+    f_jcell(jt, 0, 2, "WIN RATE", f_pc(w_t, n_t), has ? (100.0 * w_t / n_t > be_win ? green : red) : color.gray, meta)
+    f_jcell(jt, 2, 2, "EXPECTANCY", has ? f_r(exp_r) : "—", has ? (exp_r > 0 ? green : red) : color.gray, "Average outcome per trade after friction. The number that decides whether the model is worth trading.")
+    f_jcell(jt, 4, 2, "NET TOTAL", has ? f_r(array.get(SF, 0)) : "—", has ? (array.get(SF, 0) > 0 ? green : red) : color.gray, meta)
+    f_jcell(jt, 0, 3, "PF GROSS", has ? str.tostring(pf_g, "#.##") : "—", has ? (pf_g > 1 ? green : red) : color.gray, meta)
+    f_jcell(jt, 2, 3, "PF NET", has ? str.tostring(pf_n, "#.##") : "—", has ? (pf_n > 1 ? green : red) : color.gray, "Profit factor after friction: (gross wins − cost·wins) / (gross losses + cost·losses).")
+    f_jcell(jt, 4, 3, "STDEV", n_t > 1 ? str.tostring(sd_r, "#.##") + "R" : "—", color.white, "Dispersion of the R outcomes. Divide by sqrt(n) for the standard error of the expectancy.")
+    f_jcell(jt, 0, 4, "AVG WIN", w_t > 0 ? f_r(array.get(SF, 5) / w_t) : "—", green, meta)
+    f_jcell(jt, 2, 4, "AVG LOSS", loss_n > 0 ? f_r(-array.get(SF, 6) / loss_n) : "—", red, meta)
+    f_jcell(jt, 4, 4, "HOLD", has ? str.tostring(1.0 * array.get(SI, 12) / n_t, "#.#") + "b" : "—", color.white, "Average bars held.")
+    f_jcell(jt, 0, 5, "MAX DD", has ? f_r(-array.get(SF, 2)) : "—", red, "Worst peak-to-trough of the cumulative R curve.")
+    f_jcell(jt, 2, 5, "OPEN DD", has ? f_r(-array.get(SF, 9)) : "—", color.orange, "Drawdown the curve has not recovered from yet.")
+    f_jcell(jt, 4, 5, "BEST/WST", has ? f_r(array.get(SF, 3)) + " / " + f_r(array.get(SF, 4)) : "—", color.white, meta)
+    f_jcell(jt, 0, 6, "STREAK W", str.tostring(array.get(SI, 4)), green, meta)
+    f_jcell(jt, 2, 6, "STREAK L", str.tostring(array.get(SI, 5)), red, meta)
+    f_jcell(jt, 4, 6, "AMBIGUOUS", str.tostring(array.get(SI, 2)) + " (" + f_pc(array.get(SI, 2), n_t) + ")", color.orange, "Trades on a bar that spanned both TP and SL. The order is unknowable from OHLC — flip the tie-break input to see how much of the edge rests on the guess.")
+    f_jcell(jt, 0, 7, "MFE AVG", has ? f_r(array.get(SF, 7) / n_t) : "—", color.white, "Average maximum favourable excursion. Well above your target R? The target is too tight.")
+    f_jcell(jt, 2, 7, "MAE AVG", has ? f_r(array.get(SF, 8) / n_t) : "—", color.white, "Average maximum adverse excursion. Hugging −1R? The stop is too tight.")
+    f_jcell(jt, 4, 7, "TIME-STOP", str.tostring(array.get(SI, 3)) + " (" + f_pc(array.get(SI, 3), n_t) + ")", color.gray, "Settled at the close of the max-hold bar instead of on a level hit.")
+    f_jcell(jt, 0, 8, "SCORE >= 3", f_pc(array.get(SI, 9), array.get(SI, 8)) + " n" + str.tostring(array.get(SI, 8)), color.white, "Win rate of the A/A+ subset vs the whole sample. If it does not improve, the confluence score is decoration, not signal.")
+    f_jcell(jt, 2, 8, "LONG", f_pc(array.get(SI, 19), array.get(SI, 18)) + " n" + str.tostring(array.get(SI, 18)), color.white, meta)
+    f_jcell(jt, 4, 8, "SHORT", f_pc(array.get(SI, 21), array.get(SI, 20)) + " n" + str.tostring(array.get(SI, 20)), color.white, meta)
