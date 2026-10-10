@@ -907,3 +907,76 @@ real bug**:
   thresholds are the only part of the layer with that assumption.
 * Whether any of this is *profitable* is untouched by this round: the counters now make the question
   answerable in a journal, and `crtState` + `crtNetR` on 1200 synthetic bars is plumbing, not a result.
+
+## 15. Timeframe adaptation (2026-10-10): a default I could prove was a no-op, and a feature I withdrew
+
+The question was "does the indicator adapt when I switch timeframes, because I do not want to change
+settings per chart". The honest answer before this round was *partly*: everything measured in minutes or
+NY hours already did, and every parameter measured in **bars** did not, including a `preset` dropdown that
+was a manual, per-chart choice. Both halves are now closed off, plus a maintained matrix
+(`tools/settings-by-pair.md`) for the residue no script can decide.
+
+**What the code was actually doing, counted before touching it.** The ladder owned eight values
+(`tolerence`, `len`, `min_score_for_best`, `signal_cooldown`, `atr_mult_sl`, `near_atr_mult`,
+`max_fvgs_per_side`, `max_obs_per_side`). Outside it sat five bar-count inputs (`expiry_bars`,
+`liquidity_lookback`, `clean_after_bars`, `ifvgAge`, `crtObAge`), three windows that were not inputs at all
+but literals in the code - FVG freshness 10, order-block freshness 12, the premium/discount range in
+`ta.highest(high, 25)` - and nothing connected any of it to the chart.
+
+**The rule shipped.** `preset` gains `Auto from chart` (the new default) plus three coarse tiers, and Auto
+selects a tier from `timeframe.in_seconds()` rather than interpolating: the source ladder is *not* linear in
+time, so inventing a value between 5min and 15min would have been inventing tuning. Separately,
+`scale = 300 / timeframe.in_seconds()` converts each bar-count window to the same duration, `max(3, ...)`
+except the premium/discount range at `max(8, ...)`.
+
+Three things worth recording about how that was decided:
+
+* **The default was only safe because it was provably a no-op.** On a 5m chart the scale is exactly 1, so
+  every derived window lands on the number the input already carried, and the tier is the one the file
+  already defaulted to. "Auto" therefore changes nothing for the chart the model was tuned on, which is the
+  whole argument for making it the default instead of hiding it behind a switch. The Custom variant in the
+  harness below is the empirical version of the same claim.
+* **Scaling is gated on `Custom`, not on `Auto`.** The first version tied both to the same flag, so
+  overriding the ladder to `15min` on a 30m chart also restored 30m-chart windows sized like 5m ones -
+  two unrelated decisions welded together. Now a named tier moves the ladder only.
+* **Floors mark the edge of the trick.** From 1m to 60m the table is duration-exact (expiry 5.0h at every
+  one). At 4H and 1D every window collapses onto its floor and means "a few bars", not the reference
+  duration; `ifvgAge` at 1m lands exactly on the input's own ceiling of 900. That is why `tools/tf-scale-table.py`
+  exists and prints the hours columns: so the drift is visible in the documentation instead of hidden by
+  plausible bar counts. The table is generated from the formula, not typed.
+
+**A feature built, checked, and withdrawn.** `htfAuto` was written: the bias timeframe derived from the
+chart (<=5m -> 60, 15m -> 240, 30m -> 480, else D), because reading an "HTF" bias off `60` on a daily chart
+is not a higher timeframe at all. It passed every check available here - `pine-lint` clean, `pyne check`
+clean - since a `simple string` flows into `request.security`'s timeframe argument without complaint. It is
+nevertheless reverted, because `request.security`'s timeframe is exactly the kind of argument TradingView
+gates in the *editor*, and the README already says clean-as-compiled is not clean-on-TV. The asymmetry
+decided it: a small convenience for users on timeframes this file documents as unvalidated, against a failure
+mode where the entire script will not paste. `htf_tf` stays manual, with the mapping in its tooltip.
+
+**The harness result that matters more than the milliseconds.** The timed run now defaults to Auto, and on
+pyne's synthetic **daily** bars that lands on the most degenerate row of the table: `1D`, scale 0.0035,
+everything floored - a useful accident, since the default gate run is now a stress test of the clamp path.
+Its registry counts moved from `igaps=8 izones=1` to `igaps=2 izones=2`, which needs saying out loud: that is
+the rescaling doing its job on a daily chart, not a regression. The new fourth exercise (`preset Custom`)
+runs the identical build with scaling off and returns **exactly** `igaps=8 izones=1`, the pre-change numbers.
+Timings across the five runs land 728-898 ms against 728-943 ms before, entirely inside the spread §14
+established, so no performance claim of any kind is made here.
+
+**A citation I invented.** `crtMinRiskT`'s tooltip and F9 in the candle-range study both asserted "0.216R
+lost after friction, audit §11/§13". While writing the per-pair doc I went to check the number and there is
+no such measurement: no friction study exists anywhere in the audit, and neither citation resolved to
+anything. Both were rewritten as what they are - arithmetic (10 ticks on a 0.01 feed is 0.10, inside a normal
+spread) - and this paragraph is the record. It is the second invented-or-misattributed figure this session has
+had to retract, and the pattern is consistent: the fabricated numbers were the ones that supported a design
+choice I had already made.
+
+**Two patch-script failures, same class, no damage.** `patch_tf.py` aborted twice before writing: once on an
+anchor whose left-hand side an earlier loop in the same script had already renamed (`preset == "30min"` ->
+`tier == "30min"`), once on an alert concatenation whose prefix I had paraphrased instead of copied. Because
+the script accumulates edits and asserts before its single write, the `.pine` was untouched both times. A
+third, self-inflicted: five tooltips were spliced in *after* the closing paren of their `input.*` call
+because the helper appended instead of inserting - four errors from a text substitution that "applied
+cleanly". Substring surgery on Pine needs the same discipline as the Pine itself: match a whole call, not a
+line ending.
+

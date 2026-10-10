@@ -276,7 +276,7 @@ it found.
 | F6 | **both bounds taken** — a two-way day | "seek and destroy Friday… neutral or low probability" | `void: both bounds raided - a seek-and-destroy day` |
 | F7 | **the day was never tradeable** — large prior range, blown-out overnight, no build-up, NFP Friday | ICT-2017-AVOID-LONDON (A1/A3/B1/B2/B3/B4/C) | `crtSA` + the five thresholds; the panel names **which** condition, and `crtSkips` counts the days |
 | F8 | **no delivery** — armed or even in the trade, but the target never prints | "candle 3" delivery window (luxalgo) | `crtDeliverH` → counted as void, not left open until it happens to work |
-| F9 | **a box that is a spread** | this repo's own −0.216R-after-friction result (audit §13) | `crtMinRiskT`, plus the refusal when risk exceeds 1.5× the reference range |
+| F9 | **a box that is a spread** | arithmetic, not a measurement: 10 ticks on a 0.01 feed is 0.10, inside the quote spread. This row cited −0.216R from a friction study that was never run; withdrawn, audit §15 | `crtMinRiskT`, plus the refusal when risk exceeds 1.5× the reference range |
 
 Three of ICT's eight stand-aside conditions are calendar facts — a specific holiday, an unscheduled
 driver, and the count of scheduled high-impact events. Pine cannot see a calendar, so they are left
@@ -323,3 +323,12 @@ moves, so a time-anchored layer sits inert no matter what the switch says — a 
 nothing, which is the trap this harness exists for. The harness now refuses to pass an exercise whose
 counters stay at zero, and the two variants (daily reference; intra-anchor accumulator, entry fired,
 stop taken, net −1R) are the positive controls.
+
+
+**Timeframe note (same day, after audit §15).** Every gate in this layer is measured in minutes or NY
+hours, so the 01:00 anchor, the 240-minute reference candle, the 90-minute sweep window and the 8-hour
+delivery expiry mean the same thing on any chart and were left alone. The one bar-count input in the layer,
+`crtObAge`, is now rescaled with the rest (12 bars at 5m becomes 4 at 15m and floors at 3 from 30m up), and
+`Live-OB freshness` therefore keeps its *duration* rather than its bar count. What the rescaling cannot fix
+is having nowhere to act: on a 4H chart a 90-minute window sits inside one candle, so the model stays an
+execution-timeframe story - run the chart at 5m or 15m and let `crtAnchorLen` give you the 4H range.

@@ -14,6 +14,8 @@ editor. Everything else here is either documentation, verification tooling, or a
 | `cisd-v1-guide.md` | how to use it: every switch and its default, the iFVG-at-the-open recipe, the panel legend, measured cost. |
 | `cisd-audit.md` | the running record: what was found wrong in each revision, how it was verified, what the reference runtime cannot certify (§9d), and one section per round. Read §1-§2 for why the pasted v1's Noise Filter and sweep test could not do what their labels said. |
 | `crt-candle-range-study.md` | the current phase: the 4H-candle-range / 01:30-sweep breakdowns you sent, inventoried element by element against the corpus, with the extend-vs-new verdict, the build spec (all switches named), and what I recommend not building. |
+| `settings-by-pair.md` | the maintained settings matrix: what adapts to the timeframe on its own, what is derived, what you still set per pair and per session, plus the generated per-timeframe table and a starting configuration for FX / gold / indices. Update it in the same commit as any input change. |
+| `tf-scale-table.py` | prints the markdown table that `settings-by-pair.md` and guide §6 quote, from the same formula the script ships. Re-run it rather than retyping numbers. |
 | `mx-setups-study.md` | the setup inventory: what a reference set of iFVG/HTF-array screenshots actually contains, feature by feature, with the extend-vs-new build decision and the object/`request.security` budget that follows from it. This is the page the current phase (screenshots → new or refined tools) starts from. |
 | `archive/` | set aside, not deleted: `cisd-ultimate-proper-v2.pine` (+ its guide) and `mx-context-overlay.pine` (+ its guide), the superseded `cisd-ultimate-journal.pine`, and `cisd-ultimate-balanced.pristine-v1.pine`, which is v1 exactly as it arrived so any decision in §13 of the audit can be reversed. |
 
@@ -48,5 +50,12 @@ checkpoint that awards itself a point — that class is what the audit sections 
 * TradingView caches the compiled build per script name: after an edit, delete the indicator
   instance and re-add it, and check the build tag in the legend before debugging anything else.
 * Fix error *classes* across the whole file, not the line the editor pointed at.
+* **Settings guidance is part of the build.** Any input added, renamed or re-defaulted in
+  `cisd-ultimate-balanced.pine` comes with an update to `settings-by-pair.md` and to §1/§6 of
+  `cisd-v1-guide.md`, and a re-run of `tf-scale-table.py` if it is a bar count. A per-pair matrix nobody
+  maintains is worse than none, because it is believed.
+* A number that cannot be traced to a measurement, a source, or arithmetic is not written down. Two
+  figures were retracted this way (a 14x speed-up, and a "-0.216R after friction" citation that pointed at
+  a study that was never run); `tools/cisd-audit.md` §14 and §15 record both.
 * Prefer `input.timeframe` for timeframe inputs and pass it straight through; do not build a
   sanitizer for a restriction that only exists in the editor's argument gates.

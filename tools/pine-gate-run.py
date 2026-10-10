@@ -184,6 +184,13 @@ EXERCISES = {
          # arm-on-C2-close path AND the entry-refusal path; variant 2 above is what proves entry,
          # objects and the outcome walk. Two controls, four branches between them.
          ["crtSeen", "crtSwp"]),
+        # Not a CRT test: the auto tier picker and the rescaled windows are now the shipped default, so
+        # they are on in every run above. This one adds the bias-timeframe derivation, whose only safe
+        # default is off because it moves signals - and it must actually populate the registries, or a
+        # wrong window length would look like a clean run.
+        ("preset Custom: the unscaled escape hatch",
+         [('"Auto from chart", "Timeframe Preset"', '"Custom", "Timeframe Preset"')],
+         ["igaps", "izones"]),
     ],
 }
 

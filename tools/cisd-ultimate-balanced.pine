@@ -4,22 +4,29 @@ indicator("CISD Ultimate Balanced", "CISD Ult", true, max_lines_count = 500, max
 // ═══════════════════════════════════════════════════════════════════
 // PRESET SYSTEM
 // ═══════════════════════════════════════════════════════════════════
-preset = input.string("5min", "Timeframe Preset", options=["3min", "5min", "15min", "30min", "Custom"], group="======= PRESET =======")
+// The ladder is a set of hand-tuned tiers, not a formula: 5m->len 10 and 30m->len 12 are NOT
+// 3m->len 8 scaled by time, and they should not be - the tuning is per tier. So "Auto from chart"
+// picks the tier from the timeframe rather than inventing one, and then rescales only the things the
+// tiers never covered (see the block after the ladder). "Custom" is the old behaviour: every tier
+// value stays at whatever the inputs say, nothing is rescaled.
+preset = input.string("Auto from chart", "Timeframe Preset", options=["Auto from chart", "3min", "5min", "15min", "30min", "60min", "240min", "1D", "Custom"], group="======= PRESET =======", tooltip="Auto reads timeframe.in_seconds() and selects a tier, so switching 5m -> 15m -> 1H no longer needs a manual edit. The three coarse tiers are my extrapolation of the ladder's trend, not tuning from a source - on 1H and above nothing in this file has been backtested, and the panel shows which tier it picked so the assumption is at least visible.")
 
 // ═══════════════════════════════════════════════════════════════════
 // INPUTS
 // ═══════════════════════════════════════════════════════════════════
 tolerence_inp          = input.float(0.60, "Noise Filter", group="Calculations", maxval=1, minval=0, step=0.05)
 len_inp                = input.int(10, "Swing Period", group="Calculations")
-expiry_bars            = input.int(60, "Expiry Bars", group="Calculations")
-liquidity_lookback     = input.int(12, "Liquidity Lookback", group="Calculations")
+expiry_bars            = input.int(60, "Expiry Bars", group="Calculations", tooltip="Read as a 5-minute reference: with Preset on Auto or a named tier this is rescaled to your chart by 300/timeframe, so it keeps the same duration instead of the same bar count. Set Preset to Custom to use this number as written. On 15m, 60 becomes 20 bars; on 1H, 5 bars.")
+
+liquidity_lookback     = input.int(12, "Liquidity Lookback", group="Calculations", tooltip="Read as a 5-minute reference: with Preset on Auto or a named tier this is rescaled to your chart by 300/timeframe, so it keeps the same duration instead of the same bar count. Set Preset to Custom to use this number as written. On 15m, 12 becomes 4 bars, which is where the floor of 3 starts to bite.")
+
 
 grp_conf = "======= Core Confluences ======="
 require_liq_sweep   = input.bool(false, "Require Liquidity Sweep", group=grp_conf)
 require_fvg         = input.bool(false, "Require FVG / iFVG", group=grp_conf)
 require_strong_disp = input.bool(false, "Require Strong Displacement", group=grp_conf)
 require_htf_bias    = input.bool(false, "Require HTF Bias Alignment", group=grp_conf)
-htf_tf              = input.timeframe("60", "HTF for Bias", group=grp_conf)
+htf_tf              = input.timeframe("60", "HTF for Bias", group=grp_conf, tooltip="The one timeframe-dependent setting this script will NOT derive for you, and the reason is a hard limit rather than a choice: the timeframe argument of request.security has to be a constant or an input, and the value a chart-aware version would need (derived from timeframe.in_seconds()) is a computed string. A computed string may compile on TradingView, but neither checker here is the editor, and the failure mode of being wrong is that the whole script refuses to paste. So: 60 for 1m-5m charts, 240 for 15m, 480 for 30m, D for anything 1H and above - see tools/settings-by-pair.md.")
 strong_disp_mult    = input.float(0.78, "Strong Displacement Threshold", minval=0.5, maxval=1.0, step=0.05, group=grp_conf)
 
 grp_elite = "======= Elite Confluences ======="
@@ -40,7 +47,8 @@ auto_invalidate     = input.bool(true, "Auto-Invalidate on Origin Break", group=
 sweepStrict = input.bool(true, "Sweep = wick through AND close back inside", group=grp_q, tooltip="02-liquidity/liquidity-sweep.md: a sweep wicks, BOS closes. Measured on this file's own test, 89% of what counted as a sweep closed straight through the level, i.e. was a break, and 1% met the definition - which diluted the one confluence the 2022 model hangs on. Off reproduces the original behaviour exactly.")
 sweepWick   = input.float(0.60, "Min wick as share of the candle range", minval=0.0, maxval=1.0, step=0.05, group=grp_q, tooltip="asian-range-sweep.md uses wick_top_pct >= 0.6 for the high side. Only read when the strict test is on.")
 strictRatio = input.bool(false, "Strict displacement ratio (repairs the Noise Filter)", group=grp_q, tooltip="OFF by default because this is the core of the model, not a decoration: tools/cisd-audit.md section 1a shows the ratio is >= 1 by construction and the denominator degenerates to one tick on the bear side 54% of the time, so the Noise Filter cannot reject anything and the walk is 47x asymmetric. On = a repaired denominator that can fail. Try it and compare the funnel, do not trust my word for it.")
-clean_after_bars    = input.int(35, "Delete old BEST after X bars", minval=10, group=grp_q)
+clean_after_bars    = input.int(35, "Delete old BEST after X bars", minval=10, group=grp_q, tooltip="Read as a 5-minute reference: with Preset on Auto or a named tier this is rescaled to your chart by 300/timeframe, so it keeps the same duration instead of the same bar count. Set Preset to Custom to use this number as written. This is the staleness clock on the BEST label, not a signal filter.")
+
 
 grp_form = "======= Forming Setup Visuals ======="
 show_live_fvgs      = input.bool(true, "Show Live FVGs", group=grp_form)
@@ -89,11 +97,12 @@ crtStrictC2 = input.bool(false, "Acceptance is C2's own close (textbook C1/C2)",
 crtC3Only   = input.bool(false, "Enter only inside C3, the delivery candle", group=grp_crt, tooltip="C1 = the range, C2 = the raid and its close, C3 = the delivery. On, an armed setup cannot be entered until C2 has closed, so the trigger is a retest in the delivery candle rather than a fill in the raid candle. It will cost entries and add 'armed, never triggered' voids - worth measuring, because abandoning is their own step 3, not a failure of the model.")
 crtBias     = input.string("HTF bias", "Direction filter", options=["None", "HTF bias", "Above/below prior-day close", "HTF bias + prior-day close"], group=grp_crt, tooltip="'Trading CRTs against the higher-timeframe trend is the largest win-rate killer in the entire framework'. 'None' exists so you can measure what the pattern does unfiltered, which is the honest way to find out what the filter is worth.")
 crtEntry    = input.string("Anchor open retest", "Entry trigger", options=["On the close back inside", "Anchor open retest", "Range 50% retest", "Live OB tap", "iFVG tap"], group=grp_crt, tooltip="The levels the breakdowns actually mark: @SpeculatorFL's posts use a 15m order block, the '4H Key' in these panels is the anchor candle's open. 'iFVG tap' reuses this script's inverted-zone machinery - same tap-and-reject grammar, different level.")
-crtObAge    = input.int(12, "Live-OB freshness for that tap (bars)", minval=1, maxval=60, group=grp_crt)
+crtObAge    = input.int(12, "Live-OB freshness for that tap (bars)", minval=1, maxval=60, group=grp_crt, tooltip="Read as a 5-minute reference: with Preset on Auto or a named tier this is rescaled to your chart by 300/timeframe, so it keeps the same duration instead of the same bar count. Set Preset to Custom to use this number as written. 60 is the ceiling on the reference number; the rescaled value is what reaches the test.")
+
 crtTgt      = input.string("Opposite bound", "Target", options=["Opposite bound", "50% of the range", "50% then opposite bound", "R multiple"], group=grp_crt, tooltip="Candle-range theory targets the OPPOSITE EXTREME of the candle; the 50%-then-bound ladder with the stop to breakeven at 50% is the worked example on crttrading.com section 12. '+3RR' is the poster's label, and on the prices printed in the same image the box reaches about 2.2R - so 'R multiple' is here to be compared against, not trusted by default.")
 crtDeliverH = input.int(8, "Void unless reached within N hours of the anchor open", minval=0, maxval=24, group=grp_crt, tooltip="The model has a delivery window (candle 3), not 'eventually'. Price that never delivers is a failed reading and has to be counted as one, not left open on the chart until it happens to work. 0 = no expiry.")
 crtStop     = input.string("Sweep extreme", "Stop", options=["Sweep extreme", "Sweep extreme + ATR buffer"], group=grp_crt, tooltip="'The stop always goes below the sweep low / above the sweep high. No closer, no farther' - the manipulation wick is the defence. The ATR buffer is what the rest of this file uses, so it is offered second rather than first.")
-crtMinRiskT = input.int(10, "Skip if the risk is under this many ticks", minval=0, maxval=200, group=grp_crt, tooltip="A box whose risk is a handful of ticks is a spread, not a trade: tools/cisd-audit.md section 11 lost 0.216R after friction and small boxes were where it came from.")
+crtMinRiskT = input.int(10, "Skip if the risk is under this many ticks", minval=0, maxval=200, group=grp_crt, tooltip="A box whose risk is a handful of ticks is a spread, not a trade: 10 ticks on a 0.01 feed is 0.10, which sits inside the quote spread. Arithmetic, not a measurement - this tooltip used to cite a friction study that was never run, withdrawn in tools/cisd-audit.md section 15.")
 crtSA       = input.bool(true, "Apply the 2017 stand-aside list", group=grp_crt, tooltip="15-sessions/london-session-avoidance.md (ICT-2017-AVOID-LONDON) - same year and same session as this model's 01:00 anchor, and a list of conditions that disqualify the session BEFORE any setup is looked for. ICT's own framing: ignoring it does not lower your expectancy, it inverts it.")
 crtAdrMult  = input.float(2.0, "Stand aside if the prior day's range exceeded this x its 5-day ADR", minval=1.0, maxval=4.0, step=0.1, group=grp_crt, tooltip="'Typically there'll be a consolidation, or it could go choppy' the day after a large range day.")
 crtCbdrMax  = input.float(50.0, "CBDR cap (pips, 14:00-20:00 NY)", minval=0.0, step=5.0, group=grp_crt, tooltip="Note the number: the stand-aside limit is 50, NOT the 40-pip qualification limit used for CBDR projections. Two rules, two numbers, commonly conflated - see the Common Mistakes section of that page. 0 disables this check.")
@@ -111,7 +120,8 @@ grp_if = "======= iFVG engine (optional) ======="
 ifvgMode = input.string("Track only", "iFVG layer", options=["Off", "Track only", "Track + score", "Track + score + gate"], group=grp_if, tooltip="Polarity as 06-fair-value-gaps/inversion-fvg.md defines it: the gap a candle CLOSES THROUGH is the one that flips role, and the zone drawn is that gap - not the opposite side's, not the opposite colour. Track only fixes the picture; score and gate are opt-in, and Off removes every object and every point this layer produces.")
 ifvgDisp  = input.float(0.80, "Invalidation needs a body of (ATR x)", minval=0.0, maxval=3.0, step=0.1, group=grp_if, tooltip="The page wants the break decisive, not a wick and a recovery: 0.8 ATR of body on the breaking candle. 0 accepts any close through.")
 ifvgMax   = input.int(2, "Live inverted zones per side", minval=1, maxval=4, group=grp_if, tooltip="The version this came from allowed exactly one iFVG object, created only when the list was empty and never invalidated - so it showed the first one of the day and then lied for the rest of the session.")
-ifvgAge   = input.int(180, "Inverted zone expiry (bars)", minval=20, maxval=900, group=grp_if)
+ifvgAge   = input.int(180, "Inverted zone expiry (bars)", minval=20, maxval=900, group=grp_if, tooltip="Read as a 5-minute reference: with Preset on Auto or a named tier this is rescaled to your chart by 300/timeframe, so it keeps the same duration instead of the same bar count. Set Preset to Custom to use this number as written. At 1m this becomes 900 bars, which is also the input ceiling - the scaling is capped by math.round, not by maxval, so nothing is silently truncated below it.")
+
 ifvgEntry = input.string("CE (50%)", "Entry level in the inverted zone", options=["CE (50%)", "Near edge", "Far edge"], group=grp_if, tooltip="06-fair-value-gaps/ce-as-primary-entry.md makes CE the default depth in the 2025 framing; Near edge is the shallow retest, Far edge the full rebalance.")
 ifvgWin   = input.bool(true, "Take inverted entries only inside the trading window", group=grp_if)
 ifvgDraw  = input.bool(true, "Draw entry / stop / target for an inverted entry", group=grp_if)
@@ -135,6 +145,16 @@ show_dashboard        = input.bool(true, "Show Dashboard", group="Appearance")
 // ═══════════════════════════════════════════════════════════════════
 // APPLY PRESET
 // ═══════════════════════════════════════════════════════════════════
+// TradingView has no answer for "how long is a bar" on the non-time-based chart types (Renko, Range, Line
+// Break, Kagi, Point & Figure), where timeframe.in_seconds() does not describe a duration. Falling back to
+// 300 rather than trusting whatever comes back means such a chart gets the 5-minute ladder, no rescaling,
+// and no division by zero, which is the same thing the file did before this block existed.
+float tfSecRaw = timeframe.in_seconds()
+float tfSec = tfSecRaw > 0 ? tfSecRaw : 300.0
+bool  tfAuto = preset == "Auto from chart"
+string tier = preset == "Custom" ? "custom" : preset
+if tfAuto
+    tier := tfSec <= 180 ? "3min" : tfSec <= 300 ? "5min" : tfSec <= 900 ? "15min" : tfSec <= 1800 ? "30min" : tfSec <= 3900 ? "60min" : tfSec <= 15000 ? "240min" : "1D"
 float tolerence = tolerence_inp
 int   len = len_inp
 int   min_score_for_best = min_score_inp
@@ -144,7 +164,7 @@ float near_atr_mult = near_mult_inp
 int   max_fvgs_per_side = max_fvgs_inp
 int   max_obs_per_side = max_obs_inp
 
-if preset == "3min"
+if tier == "%s"
     tolerence := 0.55
     len := 8
     min_score_for_best := 2
@@ -153,7 +173,7 @@ if preset == "3min"
     near_atr_mult := 2.5
     max_fvgs_per_side := 2
     max_obs_per_side := 1
-else if preset == "5min"
+else if tier == "5min"
     tolerence := 0.60
     len := 10
     min_score_for_best := 2
@@ -162,7 +182,7 @@ else if preset == "5min"
     near_atr_mult := 2.2
     max_fvgs_per_side := 2
     max_obs_per_side := 1
-else if preset == "15min"
+else if tier == "15min"
     tolerence := 0.63
     len := 11
     min_score_for_best := 2
@@ -171,7 +191,7 @@ else if preset == "15min"
     near_atr_mult := 2.0
     max_fvgs_per_side := 2
     max_obs_per_side := 1
-else if preset == "30min"
+else if tier == "30min"
     tolerence := 0.66
     len := 12
     min_score_for_best := 2
@@ -180,6 +200,55 @@ else if preset == "30min"
     near_atr_mult := 1.8
     max_fvgs_per_side := 1
     max_obs_per_side := 1
+else if tier == "60min"
+    tolerence := 0.68
+    len := 13
+    min_score_for_best := 2
+    signal_cooldown := 11
+    atr_mult_sl := 0.25
+    near_atr_mult := 1.6
+    max_fvgs_per_side := 1
+    max_obs_per_side := 1
+else if tier == "240min"
+    tolerence := 0.70
+    len := 14
+    min_score_for_best := 3
+    signal_cooldown := 8
+    atr_mult_sl := 0.22
+    near_atr_mult := 1.4
+    max_fvgs_per_side := 1
+    max_obs_per_side := 1
+else if tier == "1D"
+    tolerence := 0.72
+    len := 15
+    min_score_for_best := 3
+    signal_cooldown := 5
+    atr_mult_sl := 0.20
+    near_atr_mult := 1.2
+    max_fvgs_per_side := 1
+    max_obs_per_side := 1
+
+// ── the parameters no tier ever covered ──────────────────────────────────────────
+// These are plain bar counts, so on a 15m chart they mean three times the time they mean on 5m,
+// and on 1H twelve times - which is how a script tuned at the open on a 5m chart quietly stops
+// meaning anything on a higher one. They are anchored to the 5-minute reference the ladder is tuned
+// at and converted back to bars for the chart in use. The floor of 3 is deliberate: an exact
+// conversion on a daily chart would ask for a 0-bar lookback, and a window of zero is not a window.
+// Scaling is gated on Custom and on a chart that has a duration, not on Auto: choosing a
+// named tier overrides the ladder without quietly putting 5-minute window lengths back on a 30-minute
+// chart. Custom is the single escape hatch, and it unscales everything at once.
+bool tfScaled   = preset != "Custom" and tfSecRaw > 0
+float tfScale = tfScaled ? 300.0 / tfSec : 1.0
+f_sc(int v) =>
+    math.max(3, math.round(v * tfScale))
+int expiryBars  = tfScaled ? f_sc(expiry_bars)        : expiry_bars
+int liqLook     = tfScaled ? f_sc(liquidity_lookback) : liquidity_lookback
+int cleanBars   = tfScaled ? f_sc(clean_after_bars)   : clean_after_bars
+int ivgAge      = tfScaled ? f_sc(ifvgAge)            : ifvgAge
+int crtObBars   = tfScaled ? f_sc(crtObAge)           : crtObAge
+int fvgFresh    = tfScaled ? f_sc(10)                 : 10
+int obFresh     = tfScaled ? f_sc(12)                 : 12
+int pdWin       = tfScaled ? math.max(8, math.round(25 * tfScale)) : 25
 
 // ═══════════════════════════════════════════════════════════════════
 // KEY LEVELS
@@ -280,7 +349,7 @@ if array.size(swinghighs) > 0
         if i < 0 or i >= array.size(swinghighs)
             continue
         line l = array.get(swinghighs, i)
-        if bar_index - line.get_x1(l) < expiry_bars
+        if bar_index - line.get_x1(l) < expiryBars
             float lvl = line.get_y1(l)
             line.set_x2(l, bar_index)
             if f_sweepHi(lvl) and barstate.isconfirmed
@@ -302,7 +371,7 @@ if array.size(swinglows) > 0
         if i < 0 or i >= array.size(swinglows)
             continue
         line l = array.get(swinglows, i)
-        if bar_index - line.get_x1(l) < expiry_bars
+        if bar_index - line.get_x1(l) < expiryBars
             float lvl = line.get_y1(l)
             line.set_x2(l, bar_index)
             if f_sweepLo(lvl) and barstate.isconfirmed
@@ -544,8 +613,8 @@ if array.size(live_bear_obs) > 0
 // ═══════════════════════════════════════════════════════════════════
 // PREMIUM / DISCOUNT + HTF + KILLZONE
 // ═══════════════════════════════════════════════════════════════════
-float recent_high = ta.highest(high, 25)
-float recent_low  = ta.lowest(low, 25)
+float recent_high = ta.highest(high, pdWin)
+float recent_low  = ta.lowest(low, pdWin)
 float equilibrium = (recent_high + recent_low) / 2
 bool in_discount = close < equilibrium
 bool in_premium  = close > equilibrium
@@ -800,7 +869,7 @@ if ifvgMode != "Off"
             array.remove(fvBot, j)
             array.remove(fvDir, j)
             array.remove(fvBar, j)
-        else if bar_index - array.get(fvBar, j) > expiry_bars
+        else if bar_index - array.get(fvBar, j) > expiryBars
             array.remove(fvTop, j)
             array.remove(fvBot, j)
             array.remove(fvDir, j)
@@ -828,7 +897,7 @@ if ifvgMode != "Off"
         int   born = array.get(ivBar, k)
         int   used = array.get(ivUsed, k)
         bool failed = role > 0 ? close < zb : close > zt
-        if failed or bar_index - born > ifvgAge
+        if failed or bar_index - born > ivgAge
             box xb = array.get(ivBox, k)
             label xl = array.get(ivLbl, k)
             if not na(xb)
@@ -1103,7 +1172,7 @@ if crtActGate()
             crtVoids := crtVoids + 1
             crtEvVoid := true
         else
-            bool trig = crtEntry == "On the close back inside" ? true : crtEntry == "Anchor open retest" ? crtDir == 1 ? low <= crtOp and close > crtOp : high >= crtOp and close < crtOp : crtEntry == "Range 50% retest" ? crtDir == 1 ? low <= crtMid and close > crtMid : high >= crtMid and close < crtMid : crtEntry == "Live OB tap" ? crtDir == 1 ? not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= crtObAge and low <= last_bull_ob_high and close > last_bull_ob_low : not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= crtObAge and high >= last_bear_ob_low and close < last_bear_ob_high : crtDir == 1 ? ifvg_bull : ifvg_bear
+            bool trig = crtEntry == "On the close back inside" ? true : crtEntry == "Anchor open retest" ? crtDir == 1 ? low <= crtOp and close > crtOp : high >= crtOp and close < crtOp : crtEntry == "Range 50% retest" ? crtDir == 1 ? low <= crtMid and close > crtMid : high >= crtMid and close < crtMid : crtEntry == "Live OB tap" ? crtDir == 1 ? not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= crtObBars and low <= last_bull_ob_high and close > last_bull_ob_low : not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= crtObBars and high >= last_bear_ob_low and close < last_bear_ob_high : crtDir == 1 ? ifvg_bull : ifvg_bear
             bool c3Ok = not crtC3Only or crtSinceA >= crtLenMin
             if trig and c3Ok
                 float entryPx = crtEntry == "Anchor open retest" ? crtOp : crtEntry == "Range 50% retest" ? crtMid : close
@@ -1395,12 +1464,12 @@ get_liq_target(bool is_bull) =>
 
 if cisd == 1 and can_signal
     trend := -1
-    bool liq_ok  = bars_since_high <= liquidity_lookback and close < nz(last_wicked_high_level, high)
-    bool fvg_ok  = (not na(last_bear_fvg_bar) and bar_index - last_bear_fvg_bar <= 10) or bear_fvg or ivLiveBear
+    bool liq_ok  = bars_since_high <= liqLook and close < nz(last_wicked_high_level, high)
+    bool fvg_ok  = (not na(last_bear_fvg_bar) and bar_index - last_bear_fvg_bar <= fvgFresh) or bear_fvg or ivLiveBear
     bool ifvg_ok = ivLiveBear
     bool disp_ok = cisd_ratio >= strong_disp_mult
     bool htf_ok  = htf_bear
-    bool ob_ok   = not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= 12 and close <= last_bear_ob_high
+    bool ob_ok   = not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= obFresh and close <= last_bear_ob_high
     bool pd_ok   = in_premium
     bool body_ok = body_pct >= body_pct_min
 
@@ -1447,16 +1516,16 @@ if cisd == 1 and can_signal
                 label liq_lbl = label.new(bar_index+25, tgt, tgt_name, style=label.style_label_left, color=color.new(red, 65), textcolor=color.white, size=size.small)
                 array.push(active_liq_labels, liq_lbl)
 
-        alert("BEST BEARISH " + grade + " | score " + str.tostring(score) + "/" + str.tostring(sMax) + " | entry " + str.tostring(b_entry, format.mintick) + " | SL " + str.tostring(b_sl, format.mintick) + " | TP " + str.tostring(b_tp, format.mintick) + " | body " + str.tostring(body_pct * 100, "#") + "% |" + winTag + " " + preset + " " + syminfo.ticker, alert.freq_once_per_bar)
+        alert("BEST BEARISH " + grade + " | score " + str.tostring(score) + "/" + str.tostring(sMax) + " | entry " + str.tostring(b_entry, format.mintick) + " | SL " + str.tostring(b_sl, format.mintick) + " | TP " + str.tostring(b_tp, format.mintick) + " | body " + str.tostring(body_pct * 100, "#") + "% |" + winTag + " " + tier + " " + syminfo.ticker, alert.freq_once_per_bar)
 
 if cisd == 2 and can_signal
     trend := 1
-    bool liq_ok  = bars_since_low <= liquidity_lookback and close > nz(last_wicked_low_level, low)
-    bool fvg_ok  = (not na(last_bull_fvg_bar) and bar_index - last_bull_fvg_bar <= 10) or bull_fvg or ivLiveBull
+    bool liq_ok  = bars_since_low <= liqLook and close > nz(last_wicked_low_level, low)
+    bool fvg_ok  = (not na(last_bull_fvg_bar) and bar_index - last_bull_fvg_bar <= fvgFresh) or bull_fvg or ivLiveBull
     bool ifvg_ok = ivLiveBull
     bool disp_ok = cisd_ratio >= strong_disp_mult
     bool htf_ok  = htf_bull
-    bool ob_ok   = not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= 12 and close >= last_bull_ob_low
+    bool ob_ok   = not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= obFresh and close >= last_bull_ob_low
     bool pd_ok   = in_discount
     bool body_ok = body_pct >= body_pct_min
 
@@ -1503,7 +1572,7 @@ if cisd == 2 and can_signal
                 label liq_lbl = label.new(bar_index+25, tgt, tgt_name, style=label.style_label_left, color=color.new(green, 65), textcolor=color.white, size=size.small)
                 array.push(active_liq_labels, liq_lbl)
 
-        alert("BEST BULLISH " + grade + " | score " + str.tostring(score) + "/" + str.tostring(sMax) + " | entry " + str.tostring(b_entry, format.mintick) + " | SL " + str.tostring(b_sl, format.mintick) + " | TP " + str.tostring(b_tp, format.mintick) + " | body " + str.tostring(body_pct * 100, "#") + "% |" + winTag + " " + preset + " " + syminfo.ticker, alert.freq_once_per_bar)
+        alert("BEST BULLISH " + grade + " | score " + str.tostring(score) + "/" + str.tostring(sMax) + " | entry " + str.tostring(b_entry, format.mintick) + " | SL " + str.tostring(b_sl, format.mintick) + " | TP " + str.tostring(b_tp, format.mintick) + " | body " + str.tostring(body_pct * 100, "#") + "% |" + winTag + " " + tier + " " + syminfo.ticker, alert.freq_once_per_bar)
 
 // Clean old signals
 if array.size(active_bars) > 0
@@ -1512,7 +1581,7 @@ if array.size(active_bars) > 0
         // empty bound still runs the body once with a bad index — skip it
         if i < 0 or i >= array.size(active_bars)
             continue
-        if bar_index - array.get(active_bars, i) > clean_after_bars
+        if bar_index - array.get(active_bars, i) > cleanBars
             line.delete(array.get(active_origin_lines, i))
             if i < array.size(active_entry_lines)
                 line.delete(array.get(active_entry_lines, i))
@@ -1600,7 +1669,7 @@ if analysis == ""
 if show_dashboard and barstate.islast
     var table dash = table.new(position.top_right, 2, 16, bgcolor=color.new(#0d0d0d, 15), border_width=1)
     table.cell(dash, 0, 0, "CISD Ultimate", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 0, preset, text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 0, tier + ' / ' + timeframe.period + (tfScaled ? ' x' + str.tostring(tfScale, '#.####') : preset == "Custom" ? ' windows as written' : ' no bar duration here'), text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 1, 1, str.tostring(score) + " " + grade, text_color=score >= 3 ? green : score == 2 ? color.yellow : red, text_size=size.small)
     table.cell(dash, 0, 2, "Analysis", text_color=color.gray, text_size=size.tiny)
