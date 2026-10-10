@@ -305,7 +305,19 @@ default-off or default-neutral, so the file behaves exactly as before until `crt
 * four `alertcondition`s (raid, entry, outcome, void) so the failure path is alertable too;
 * `crtGateCore`/`scCrt` are the only hooks into the CISD core, both off: on, the candle-range state vetoes or scores the `BEST` signal.
 
-Verification was the whole gate order, plus two new **exercise variants** in `tools/pine-gate-run.py`.
+Three switches were added on the same day, after checking the build against the C1/C2/C3 sequence the
+literature describes rather than against my own notes: `Reference candle length (min)` (240 = the 4H
+anchor in the screenshots, 60 = the hourly anchors `21-crt/crt-rules.md` lists, which the first build
+could not express because the span was hardcoded in three places), `Acceptance is C2's own close`
+(the textbook C2 test, off by default because the screenshots enter mid-C2), and `Enter only inside C3`
+(the delivery candle as an entry gate). It also surfaced a real bug: in provisional mode the raid was
+tested against a bound that already contained the bar being tested, so it could never fire — fixed by
+judging the raid and the acceptance against the level that existed before the bar, while the target
+stays the candle's opposite bound. What is still *not* wired in: a structure-shift requirement inside
+C3, because `cisd` is defined after this block in the file and Pine forbids the forward reference; the
+entry block would have to move below the CISD core for that.
+
+Verification was the whole gate order, plus three new **exercise variants** in `tools/pine-gate-run.py`.
 The first forced-on run reported `crtSeen=0`: pyne executes 1-day synthetic bars whose clock never
 moves, so a time-anchored layer sits inert no matter what the switch says — a clean exit that proved
 nothing, which is the trap this harness exists for. The harness now refuses to pass an exercise whose

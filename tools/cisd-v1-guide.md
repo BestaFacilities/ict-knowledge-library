@@ -156,11 +156,25 @@ tradeable both end there.
 
 ### Cost
 
-Measured on the current harness (1200 bars, best of 3) with the layer **off**, which is the shipped
-default: **691 ms as first written, 654 ms after moving the 2017 gates to once a day**. With the layer
-**on** in the exercise variants the same two states are **10457 ms and 734 ms** — a 14× difference from
-one change, because `dayofweek`/`dayofmonth` and five comparisons per bar were doing the work of a
-per-day evaluation. Both numbers are pyne's, not TradingView's (see audit §9d on what the reference
-runtime can and cannot certify), and they are not comparable with the 567 ms recorded in §13: that run
-predates seven new probes and the exercise machinery in `pine-gate-run.py`. The last measured figure for
-this file in this harness, with the candle-range code compiled in but switched off, is **654 ms**.
+Three switches arrived after the first build, all of them about the C1/C2/C3 sequence:
+`Reference candle length (min)` (240 for the 4H anchor, **60 for the hourly anchors the library lists**
+— 02:00 / 03:00 / 05:00 / 09:00 / 13:00 NY — which the first build could not express),
+`Acceptance is C2's own close (textbook C1/C2)` (off: the shipped default judges the acceptance on any
+bar inside the window, which is what the screenshots show — they entered at 01:30, hours before C2
+closed; on: the raid is remembered, the stop sits behind its deepest tap, and the test settles only at
+C2's close), and `Enter only inside C3` (off: on, an armed setup may not be entered until C2 has
+closed, so the trigger is a retest in the delivery candle).
+
+Measured on the current harness with the layer off — the shipped default — the file runs at
+**670–730 ms** at 1200 bars, best of 3, with a run-to-run spread of about ±60 ms. Two things worth
+saying about that number rather than dressing it up: the **567 ms** recorded in audit §13 is not a
+clean control (this harness has since grown eight probes and three exercise builds), and an earlier
+draft of this section claimed a 14× speed-up from moving the 2017 gates to once a day — that was
+**Numba compile cost in a single-repetition run, not the script**, and the claim is retracted. The
+daily-scoping was kept anyway, because it is what the source prescribes ("checked at midnight NY") and
+it fixed a real bug: on a chart shorter than one session the stand-aside list had never been evaluated.
+
+What the harness can certify here ends at the clock. The time gates cannot be exercised at all — pyne
+runs 1-day synthetic bars whose clock barely moves — so `Reference candle opens at this NY hour`,
+the sweep window and the delivery expiry are verified statically and need one look on a real chart at
+01:00 NY.

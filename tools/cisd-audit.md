@@ -842,20 +842,61 @@ provisional accumulator, the immediate-entry trigger, the object creation and mu
 are switched *off* inside the variants and that is deliberate: with no real daily history under pyne they
 would reject every bar for the wrong reason, which is not a test of the machine.
 
-### Perf, measured rather than asserted
+### Perf: a claim I made, then withdrew
 
-Two states, same harness, same data, this session: at the shipped default (layer off) **691 ms → 654 ms**
-when the 2017 gates moved from every bar to once a day. In the forced-on exercise variants the same
-change is **10457 ms → 734 ms**. The per-bar cost was `dayofweek(time, tz)` plus `dayofmonth(time, tz)`
-and five float comparisons feeding a stand-aside verdict that, by the source's own words, is evaluated at
-midnight — a correctness reading that happened to be the optimisation. The same `if newNyDay or
-barstate.isfirst` block also fixed a real bug: `newNyDay` needs a previous bar to compare against, so on
-a chart shorter than one session the stand-aside list had never been evaluated at all.
+The first version of this section said the daily-scoping of the 2017 gates took the exercise runs from
+10457 ms to 734 ms — a 14× win. It is wrong, and the error is worth keeping in the record because it is
+a measurement error, not a code error. The exercises ran with `reps=1`; the timed run takes best of 3.
+The ~10 s on every single-repetition run was **Numba compiling the generated module in that process**,
+cached afterwards — not script time. Re-running the same build twice put the exercises at 780–940 ms,
+and re-running the *timed* run moved it between 670 and 728 ms with no code change at all. So:
 
-The daily-scoping is where the residual lives now: ~0.07 ms/bar of clock arithmetic and the reference
-accumulator, which run even with `crtOn` off. I could fold those into one `if crtOn` block and convert
-eight globals to `var`, and did not: that is the kind of change that manufactures state bugs, and it
-buys nothing measurable next to the 14× already taken.
+* the run-to-run spread of this harness is roughly **±60 ms (~8%)**, which is larger than the 691 → 654
+  difference I attributed to the refactor;
+* the "14×" was a warm-up artifact, and the harness now uses `reps=3` + min for the exercises too, so
+  the same mistake cannot be read out of its output again;
+* the 567 ms in §13 is not a valid control either, since the harness has since grown eight probes and
+  three exercise builds. The honest statement about this layer's cost is: **at the shipped default the
+  file measures 670–730 ms and the layer is not the reason for any visible part of it**; the pre/post
+  difference is inside the noise floor, and I am not going to claim a speed-up or a slowdown from it.
+
+The daily-scoping stays for the reason that has nothing to do with perf: the source evaluates these
+conditions at midnight, `newNyDay` never fires on a chart shorter than one session (so stand-aside was
+silently inert on short intraday charts — a real bug), and a once-a-day evaluation of a once-a-day fact
+is just correct. `barstate.isfirst` was already the pattern used elsewhere in this file, so it is a
+documented v6 spelling and not a guess at `is_last`.
+
+### The C1/C2/C3 question (2026-10-10, same day, later)
+
+Asked whether the candle-1 / candle-2 / candle-3 sequence was integrated. Auditing it against the code
+rather than the notes found one thing integrated loosely, one thing not integrated at all, and **one
+real bug**:
+
+* **C1** — integrated, and the reference length is now an input (`Reference candle length (min)`, 240
+  for the 4H anchor in the screenshots, 60 for the hourly anchors `21-crt/crt-rules.md` lists). The
+  first build hardcoded `1200`/`240` in three places, which silently meant "you cannot use the hourly
+  variants at all" — the same class of defect as the audit's earlier fixed-vs-input findings.
+* **C2** — integrated twice over: the default judges the acceptance on any bar inside the sweep window
+  (the read the screenshots support: entries at 01:30 and "3am entry", hours before C2 closed), and
+  `Acceptance is C2's own close` is the textbook variant, which additionally remembers the raid and puts
+  the stop behind its **deepest tap** rather than behind whatever bar happened to close back inside.
+* **C3** — was only a clock (`Void unless reached within N hours of the anchor open`, where 8 hours from
+  a 01:00 anchor is exactly the close of candle 3, so the default encoded the rule by accident rather
+  than by construction). Now `Enter only inside C3` makes the delivery candle a real gate. What C3
+  often also carries in the literature — a structure shift inside it — is still **not** required by the
+  entry, because `cisd` is computed in the CISD core further down the file and a Pine global cannot be
+  read before it is defined (the validator's FORWARD-REF class). Wiring that in means moving the CRT
+  entry block below the core, which is the one structural change this round deliberately did not make.
+* **The bug** — in provisional mode the raid test compared the bar against the running bound that
+  already included that bar, so `low < running_low` was unsatisfiable and the option's raid could never
+  fire. Fixed by raiding and settling against the bound as it stood *before* the bar (`crtPrevHi` /
+  `crtPrevLo`) while the target stays the candle's actual opposite bound. Found only because the third
+  exercise variant refused to fire and the must-fire rule would not let that pass as a success.
+* To find it, the void branches gained a machine-readable `crtWhyCode` twin of the human note (1 no raid
+  before expiry, 2 accepted outside, 3 both bounds, 4 no trigger, 5 two-way C2, 6 C2 closed outside,
+  7 filter-rejected at C2, 8 no bound taken, 9 no delivery, 10–12 entry refused: side / tick floor /
+  range). The panel keeps the sentence; the harness can only read numbers, and "which void" is the
+  difference between a test and a guess.
 
 ### Still not verified, said plainly
 

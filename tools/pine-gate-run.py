@@ -82,7 +82,7 @@ PROBES = {
                                  'plot(box.count(), "boxes")', 'plot(label.count(), "labels")',
                                  'plot(invSeen, "inverted")'],
     "cisd-ultimate-balanced.pine": ['plot(array.size(ivTop), "izones")', 'plot(array.size(fvTop), "igaps")',
-                                    'plot(box.count(), "boxes")', 'plot(line.count(), "lines")', 'plot(crtState, "crtState")', 'plot(crtSeen, "crtSeen")', 'plot(crtSweeps, "crtSwp")', 'plot(crtEntries, "crtEnt")', 'plot(crtVoids, "crtVoid")', 'plot(crtFiltered, "crtFilt")', 'plot(crtNetR, "crtNetR")',
+                                    'plot(box.count(), "boxes")', 'plot(line.count(), "lines")', 'plot(crtState, "crtState")', 'plot(crtSeen, "crtSeen")', 'plot(crtSweeps, "crtSwp")', 'plot(crtEntries, "crtEnt")', 'plot(crtVoids, "crtVoid")', 'plot(crtFiltered, "crtFilt")', 'plot(crtNetR, "crtNetR")', 'plot(crtWhyCode, "crtWhy")',
                                     'plot(label.count(), "labels")'],
 }
 
@@ -137,7 +137,11 @@ FORCE = [('crtOn       = input.bool(false,', 'crtOn       = input.bool(true,'),
          # stand-aside needs real daily history and the delivery/bias rules are measured FROM the
          # anchor open: left on, they reject every bar for the wrong reason.
          ('crtDeliverH = input.int(8,', 'crtDeliverH = input.int(0,'),
-         ('crtBias     = input.string("HTF bias",', 'crtBias     = input.string("None",')]
+         ('crtBias     = input.string("HTF bias",', 'crtBias     = input.string("None",'),
+         # The tick floor is calibrated to a real 5-digit FX feed; pyne's synthetic prices are a
+         # different scale entirely, so the guard (correctly) refuses every entry there. Zeroing it
+         # for the exercises is the same kind of unit correction as the gap-geometry subs above.
+         ('crtMinRiskT = input.int(10,', 'crtMinRiskT = input.int(0,')]
 
 EXERCISES = {
     "cisd-ultimate-balanced.pine": [
@@ -153,6 +157,33 @@ EXERCISES = {
                    'crtEntry    = input.string("On the close back inside",'),
                   ('bool  crtTfOk  = crtRef', 'bool  crtTfOk  = true or crtRef')],
          ["crtSeen", "crtSwp", "crtEnt"]),
+        # The strict C1/C2 read and the C3 entry gate cannot be reached by the two variants above,
+        # so they get their own - with the reference length cut to 15 minutes, because the frozen
+        # pyne clock sits 39 minutes into the anchor and the C2-close boundary has to be crossable.
+        ("crt strict C2 close + C3 entry",
+         FORCE + [('crtRef      = input.string("Prev 4H candle",',
+                   'crtRef      = input.string("Intra-anchor (provisional bounds)",'),
+                  ('crtAnchorH  = input.int(1,', 'crtAnchorH  = input.int(0,'),
+                  ('crtAnchorLen= input.int(240,', 'crtAnchorLen= input.int(15,'),
+                  ('crtEntry    = input.string("Anchor open retest",',
+                   'crtEntry    = input.string("On the close back inside",'),
+                  ('bool  crtTfOk  = crtRef', 'bool  crtTfOk  = true or crtRef'),
+                  ('crtStrictC2 = input.bool(false,', 'crtStrictC2 = input.bool(true,'),
+                  # pyne's clock is frozen, so "the bar that closes C2" never arrives on its own:
+                  # settle on a bar index instead. Same branch, reachable boundary.
+                  ('            if crtSinceA >= crtLenMin', '            if bar_index > 3'),
+                  # ...and the matching half: the anchor has to be BUILT before it can be raided, and
+                  # with a frozen clock "inside the anchor candle" and "past the anchor candle" cannot
+                  # both be true. Let the accumulator run for the whole series.
+                  ('crtRef == "Intra-anchor (provisional bounds)" ? crtSinceA < crtLenMin : false',
+                   'crtRef == "Intra-anchor (provisional bounds)" ? true : false'),
+                  ('crtC3Only   = input.bool(false,', 'crtC3Only   = input.bool(true,')],
+         # crtEnt is NOT required here, and that is deliberate: on pyne's synthetic bars the settle bar
+         # tends to close exactly on the running extreme, which trips the "stop must be on the far side
+         # of the entry" guard (crtWhy=10) and keeps the setup armed. So this variant proves the strict
+         # arm-on-C2-close path AND the entry-refusal path; variant 2 above is what proves entry,
+         # objects and the outcome walk. Two controls, four branches between them.
+         ["crtSeen", "crtSwp"]),
     ],
 }
 
@@ -226,7 +257,7 @@ def main() -> int:
         for name, extra, must in EXERCISES.get(src.name, []):
             vdst = Path("/tmp") / ("gate-%s.pine" % re.sub(r"\W+", "-", name))
             build(src, vdst, extra)
-            wall, rc, out, err = run_copy(vdst, bars, reps=1)[0]
+            wall, rc, out, err = min(run_copy(vdst, bars, reps=3), key=lambda r: r[0])
             if rc != 0:
                 rc_all = 1
                 print("  FAIL exercise %s rc=%d\n%s\n%s" % (name, rc, out[-1200:], err[-2000:]))

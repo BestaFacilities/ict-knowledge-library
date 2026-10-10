@@ -79,11 +79,14 @@ grp_crt = "======= 4H candle range (optional) ======="
 crtOn       = input.bool(false, "Use a reference candle's range as the day's grid", group=grp_crt, tooltip="OFF by default, and nothing in the CISD core consults this layer until you also switch crtGateCore on. Source note: tools/crt-candle-range-study.md. Bounds are the reference candle's wicks; the test is 02-liquidity/liquidity-sweep.md's wick-plus-close-back-inside, which is also 20-turtle-soup/turtle-soup.md's failure condition.")
 crtRef      = input.string("Prev 4H candle", "Reference range", options=["Prev 4H candle", "Prev daily candle", "Intra-anchor (provisional bounds)"], group=grp_crt, tooltip="'Prev 4H candle' is candle 1 of the classic definition (LuxAlgo's library page: mark candle 1's high/low, candle 2 does the raid). 'Intra-anchor' reads the bounds of a candle that is still printing - it is here because a shifting boundary is named as the most common cause of failed candle-range trades, not because the reading is right. 'Prev daily candle' is the daily CRT variant and costs no new data.")
 crtAnchorH  = input.int(1, "Anchor candle opens at this NY hour", minval=0, maxval=23, group=grp_crt, tooltip="1 = the 01:00 NY 4H candle in your screenshots ('4h 1 AM CRT', 'Key Timing 01:30 Liquidity sweep'); the chart clock is pinned to New York by the 17/21/1 labels, see the study section 2. 01:00 is also the April-2017 mentorship London open, which the Killzone set switch already knows.")
+crtAnchorLen= input.int(240, "Reference candle length (min)", minval=15, maxval=1440, step=15, group=grp_crt, tooltip="240 = the 4H anchor the screenshots use. 60 covers the HOURLY anchors 21-crt/crt-rules.md lists (02:00 / 03:00 / 05:00 / 09:00 / 13:00 NY) - the same machine on a shorter candle, which is what those hours are normally measured on. Ignored by the daily reference, which is 1440 by definition.")
 crtWinOpen  = input.int(0, "Sweep window opens N min after the anchor open", minval=0, maxval=360, group=grp_crt)
 crtWinLen   = input.int(90, "Sweep window length (min)", minval=15, maxval=360, group=grp_crt, tooltip="30 covers their printed 01:30 exactly; 90 covers the 01:00-02:30 first hour and a half. The window does not wrap past midnight.")
 crtTimeHard = input.bool(true, "No raid inside the window = no setup", group=grp_crt, tooltip="@MadoCRT, posted 2026-10-08: 'If the price condition is there but the time condition doesn't align, do absolutely nothing.' On, that is the rule rather than a preference.")
 crtDraw     = input.bool(true, "Draw the range, its bounds and the live setup", group=grp_crt, tooltip="Nine objects in total, created once and moved - not nine per day. That is why this layer can live in this script at all.")
 crtAccept   = input.string("Close back inside", "Re-entry test", options=["Touch only", "Close back inside", "Close + body back inside"], group=grp_crt, tooltip="The close is the test: 'a close beyond the extreme says the opposite, and the CRT is void in that direction' (LuxAlgo). One tick back over the level is a touch, not acceptance, so the body variant is offered.")
+crtStrictC2 = input.bool(false, "Acceptance is C2's own close (textbook C1/C2)", group=grp_crt, tooltip="LuxAlgo's sentence: 'candle 2 must close back above candle 1's low'. Off (default) the acceptance is judged on any bar inside the sweep window, which is the read the screenshots actually show - they entered at 01:30, hours before C2 closed, and @SpeculatorFL's own post says '3am entry'. On, the raid is remembered, the stop sits behind its deepest tap rather than behind the bar that happened to close back inside, and the test is settled only when C2 closes. Needs a sub-daily reference and a close-based acceptance; with Touch only it has nothing to settle. In the provisional mode every new extreme inside the candle is by construction a raid of its own bound, which is the cleanest demonstration of why the model waits for the close.")
+crtC3Only   = input.bool(false, "Enter only inside C3, the delivery candle", group=grp_crt, tooltip="C1 = the range, C2 = the raid and its close, C3 = the delivery. On, an armed setup cannot be entered until C2 has closed, so the trigger is a retest in the delivery candle rather than a fill in the raid candle. It will cost entries and add 'armed, never triggered' voids - worth measuring, because abandoning is their own step 3, not a failure of the model.")
 crtBias     = input.string("HTF bias", "Direction filter", options=["None", "HTF bias", "Above/below prior-day close", "HTF bias + prior-day close"], group=grp_crt, tooltip="'Trading CRTs against the higher-timeframe trend is the largest win-rate killer in the entire framework'. 'None' exists so you can measure what the pattern does unfiltered, which is the honest way to find out what the filter is worth.")
 crtEntry    = input.string("Anchor open retest", "Entry trigger", options=["On the close back inside", "Anchor open retest", "Range 50% retest", "Live OB tap", "iFVG tap"], group=grp_crt, tooltip="The levels the breakdowns actually mark: @SpeculatorFL's posts use a 15m order block, the '4H Key' in these panels is the anchor candle's open. 'iFVG tap' reuses this script's inverted-zone machinery - same tap-and-reject grammar, different level.")
 crtObAge    = input.int(12, "Live-OB freshness for that tap (bars)", minval=1, maxval=60, group=grp_crt)
@@ -654,6 +657,10 @@ var bool  saTight = true
 // The clock the whole layer hangs on: minutes since the anchor candle opened, New York, wrapped so
 // an anchor in the evening still measures forward correctly.
 int  crtAnchorMin = crtRef == "Prev daily candle" ? 0 : crtAnchorH * 60
+// One length drives four things: the reference build window, the provisional span, the C2-close
+// boundary and the C3 entry gate. Hardcoding 240 in three places is how an hourly-anchor reading
+// would silently use a 4H candle's timing.
+int  crtLenMin = crtRef == "Prev daily candle" ? 1440 : crtAnchorLen
 int  crtSinceA    = (nyMin - crtAnchorMin + 1440) % 1440
 bool crtInWin     = crtSinceA >= crtWinOpen and crtSinceA < crtWinOpen + crtWinLen
 bool crtExpired   = crtDeliverH > 0 and crtSinceA >= crtDeliverH * 60
@@ -661,11 +668,16 @@ bool crtExpired   = crtDeliverH > 0 and crtSinceA >= crtDeliverH * 60
 // Candle 1. Built by accumulating chart bars inside the reference window instead of by asking for a
 // "240" bar, so it is independent of where your chart's 4H candles happen to start (a 17:00-anchored
 // template and a 00:00-anchored one would otherwise disagree about which candle is which).
-bool  crtRefBuild = not crtOn ? false : crtRef == "Prev 4H candle" ? crtSinceA >= 1200 : crtRef == "Intra-anchor (provisional bounds)" ? crtSinceA < 240 : false
+bool  crtRefBuild = not crtOn ? false : crtRef == "Prev 4H candle" ? crtSinceA >= 1440 - crtLenMin : crtRef == "Intra-anchor (provisional bounds)" ? crtSinceA < crtLenMin : false
 var bool  crtRefActive = false
 var float crtRefHi = na
 var float crtRefLo = na
 var float crtRefOp = na
+// The bound as it stood BEFORE this bar. In provisional mode the running high/low already contains
+// the bar being tested, so "low < running low" is unsatisfiable and "the raid" is never seen: the
+// level has to be the one price actually took from the earlier bars of the candle.
+var float crtPrevHi = na
+var float crtPrevLo = na
 var float crtRefCl = na
 if crtRefBuild
     if not crtRefActive
@@ -673,7 +685,11 @@ if crtRefBuild
         crtRefOp := open
         crtRefHi := high
         crtRefLo := low
+        crtPrevHi := na
+        crtPrevLo := na
     else
+        crtPrevHi := crtRefHi
+        crtPrevLo := crtRefLo
         crtRefHi := math.max(crtRefHi, high)
         crtRefLo := math.min(crtRefLo, low)
     crtRefCl := close
@@ -918,6 +934,9 @@ var int   crtEntryBar = na
 var bool  crtBe       = false
 var bool  crtUsedToday = false
 var string crtNote    = ''
+// A machine-readable twin of crtNote: the panel reads the sentence, the harness can only read a
+// number, and 'which void did it take' is the difference between a test and a guess.
+var int   crtWhyCode  = 0
 var int   crtSeen     = 0
 var int   crtSweeps   = 0
 var int   crtEntries  = 0
@@ -958,6 +977,17 @@ if newNyDay
     crtBe := false
 
 bool crtWinOK = not crtTimeHard or crtInWin
+// Strict mode is only meaningful where there IS a C2 close to wait for and a close to judge.
+bool crtStrictOn = crtStrictC2 and crtAccept != "Touch only" and crtRef != "Prev daily candle"
+var bool  crtTapLo = false
+var bool  crtTapHi = false
+var float crtTapLoPx = na
+var float crtTapHiPx = na
+if newNyDay
+    crtTapLo := false
+    crtTapHi := false
+    crtTapLoPx := na
+    crtTapHiPx := na
 bool crtBiasBull = crtBias == "None" ? true : crtBias == "HTF bias" ? htf_bull : crtBias == "Above/below prior-day close" ? close > pd_close : htf_bull and close > pd_close
 bool crtBiasBear = crtBias == "None" ? true : crtBias == "HTF bias" ? htf_bear : crtBias == "Above/below prior-day close" ? close < pd_close : htf_bear and close < pd_close
 float crtBuf = crtStop == "Sweep extreme + ATR buffer" ? atr * atr_mult_sl : 0.0
@@ -966,8 +996,13 @@ if crtOn and crtStandAside
     crtSkips := crtSkips + (newNyDay ? 1 : 0)
 
 if crtActGate()
-    bool touchLo  = low  <= crtLo
-    bool touchHi  = high >= crtHi
+    // Provisional mode raids and settles against the level that EXISTED (crtPrev*), while the target
+    // stays the candle's actual opposite bound: a raid of a bound you moved yourself is not a raid,
+    // and freezing the acceptance against a moving line is what makes the option self-fulfilling.
+    float crtLoTest = crtProv ? nz(crtPrevLo, crtLo) : crtLo
+    float crtHiTest = crtProv ? nz(crtPrevHi, crtHi) : crtHi
+    bool touchLo  = crtProv ? not na(crtPrevLo) and low  < crtLoTest : low  <= crtLo
+    bool touchHi  = crtProv ? not na(crtPrevHi) and high > crtHiTest : high >= crtHi
     bool testLo   = crtAccept == "Touch only" ? touchLo : crtAccept == "Close back inside" ? touchLo and close > crtLo : touchLo and close > crtLo and close > open
     bool testHi   = crtAccept == "Touch only" ? touchHi : crtAccept == "Close back inside" ? touchHi and close < crtHi : touchHi and close < crtHi and close < open
 
@@ -978,9 +1013,58 @@ if crtActGate()
     if crtState == 1
         if crtExpired
             crtState := 6
+            crtWhyCode := 1
             crtNote  := 'no raid before the delivery window closed - the day was a range, not a setup'
             crtVoids := crtVoids + 1
             crtEvVoid := true
+        else if crtStrictOn
+            // Candle 2's wick is the event; candle 2's CLOSE is the test. Both halves of the source's
+            // sentence, in the order the source puts them in.
+            if crtInWin and touchLo
+                crtTapLo := true
+                crtTapLoPx := na(crtTapLoPx) ? low : math.min(crtTapLoPx, low)
+            if crtInWin and touchHi
+                crtTapHi := true
+                crtTapHiPx := na(crtTapHiPx) ? high : math.max(crtTapHiPx, high)
+            if crtSinceA >= crtLenMin
+                bool needBody = crtAccept == "Close + body back inside"
+                bool okLo = crtTapLo and close > crtLoTest and (not needBody or close > open)
+                bool okHi = crtTapHi and close < crtHiTest and (not needBody or close < open)
+                bool bullSideS = okLo and not crtTapHi
+                bool bearSideS = okHi and not crtTapLo
+                if not crtUsedToday and (bullSideS and crtBiasBull and not crtBlockBull or bearSideS and crtBiasBear and not crtBlockBear)
+                    crtState := 2
+                    crtDir := bullSideS ? 1 : -1
+                    crtSweep := bullSideS ? crtTapLoPx : crtTapHiPx
+                    crtSweeps := crtSweeps + 1
+                    crtEvArm := true
+                    crtNote := 'C2 closed back inside after raiding the ' + (bullSideS ? 'low' : 'high') + ' - settled on the candle, not the bar'
+                    if crtTgt == "50% then opposite bound"
+                        crtTp1 := crtMid
+                else if crtTapLo and crtTapHi
+                    crtState := 6
+                    crtVoids := crtVoids + 1
+                    crtEvVoid := true
+                    crtWhyCode := 5
+                    crtNote := 'both bounds taken inside C2 - a two-way candle, nothing to deliver to'
+                else if (crtTapLo and close < crtLoTest) or (crtTapHi and close > crtHiTest)
+                    crtState := 6
+                    crtVoids := crtVoids + 1
+                    crtEvVoid := true
+                    crtWhyCode := 6
+                    crtNote := 'C2 closed outside the bound it raided - the break held, so the model is void'
+                else if crtTapLo or crtTapHi
+                    crtState := 6
+                    crtFiltered := crtFiltered + 1
+                    crtEvVoid := true
+                    crtWhyCode := 7
+                    crtNote := 'raid at C2 close rejected by the ' + (crtBlockBull or crtBlockBear ? 'daily streak rule' : 'bias filter') + ' - skipped'
+                else
+                    crtState := 6
+                    crtVoids := crtVoids + 1
+                    crtEvVoid := true
+                    crtWhyCode := 8
+                    crtNote := 'C2 closed without ever taking a bound - no raid, no model'
         else if crtWinOK and (testLo or testHi)
             bool bullSide = testLo and not testHi
             bool bearSide = testHi and not testLo
@@ -990,6 +1074,8 @@ if crtActGate()
                 crtSweep := bullSide ? low : high
                 crtSweeps := crtSweeps + 1
                 crtEvArm := true
+                crtTapLo := false
+                crtTapHi := false
                 crtNote  := (bullSide ? 'raided the low and closed back inside' : 'raided the high and closed back inside') + ' at ' + str.tostring(math.floor(nyMin / 60.0), "00") + ':' + str.tostring(nyMin % 60, "00") + ' NY'
                 if crtTgt == "50% then opposite bound"
                     crtTp1 := crtMid
@@ -1000,22 +1086,26 @@ if crtActGate()
     if crtState == 2
         if crtDir == 1 ? close < crtLo : close > crtHi
             crtState := 6
+            crtWhyCode := 2
             crtNote  := 'accepted outside the range: the model is void in that direction'
             crtVoids := crtVoids + 1
             crtEvVoid := true
         else if (crtDir == 1 ? touchHi : touchLo) and not na(crtSweep)
             crtState := 6
+            crtWhyCode := 3
             crtNote  := 'both bounds raided - a seek-and-destroy day, not a delivery day'
             crtVoids := crtVoids + 1
             crtEvVoid := true
         else if crtExpired
             crtState := 6
+            crtWhyCode := 4
             crtNote  := 'armed, but no trigger before the window closed - abandon, per the checklist'
             crtVoids := crtVoids + 1
             crtEvVoid := true
         else
             bool trig = crtEntry == "On the close back inside" ? true : crtEntry == "Anchor open retest" ? crtDir == 1 ? low <= crtOp and close > crtOp : high >= crtOp and close < crtOp : crtEntry == "Range 50% retest" ? crtDir == 1 ? low <= crtMid and close > crtMid : high >= crtMid and close < crtMid : crtEntry == "Live OB tap" ? crtDir == 1 ? not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= crtObAge and low <= last_bull_ob_high and close > last_bull_ob_low : not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= crtObAge and high >= last_bear_ob_low and close < last_bear_ob_high : crtDir == 1 ? ifvg_bull : ifvg_bear
-            if trig and crtWinOK
+            bool c3Ok = not crtC3Only or crtSinceA >= crtLenMin
+            if trig and c3Ok
                 float entryPx = crtEntry == "Anchor open retest" ? crtOp : crtEntry == "Range 50% retest" ? crtMid : close
                 float slP = crtDir == 1 ? crtSweep - crtBuf : crtSweep + crtBuf
                 float risk = math.abs(entryPx - slP)
@@ -1039,6 +1129,7 @@ if crtActGate()
                     crtNote := (crtDir == 1 ? 'LONG ' : 'SHORT ') + str.tostring(entryPx, format.mintick) + ' stop ' + str.tostring(slP, format.mintick) + ' target ' + str.tostring(crtTgt == "50% of the range" ? crtMid : crtTpP, format.mintick)
                     alert('CRT ' + (crtDir == 1 ? 'long' : 'short') + ' ' + str.tostring(entryPx, format.mintick) + ' | ref ' + crtRef + ' anchor ' + str.tostring(crtAnchorH) + ':00 NY | stop ' + str.tostring(slP, format.mintick) + ' | target ' + str.tostring(crtTpP, format.mintick) + ' | ' + str.tostring(risk / pipSz, "#.#") + ' pips risk | ' + syminfo.ticker)
                 else
+                    crtWhyCode := not sideOk ? 10 : not bigEnough ? 11 : 12
                     crtNote := 'raid valid, entry refused: ' + (not sideOk ? 'the stop is not on the far side of the entry' : not bigEnough ? 'risk under the tick floor (that is a spread, not a trade)' : 'risk larger than the reference range')
 
     if crtState == 3 and bar_index != crtEntryBar
@@ -1068,6 +1159,7 @@ if crtActGate()
         else if crtExpired
             crtState := 6
             crtVoids := crtVoids + 1
+            crtWhyCode := 9
             crtNote := 'in the trade, but nothing delivered inside the window - counted, not left open'
             crtEvVoid := true
 
