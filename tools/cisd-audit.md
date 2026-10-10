@@ -763,3 +763,106 @@ iFVG paths execute at all (contiguous synthetic bars produce none: the first suc
 `arrs=0`, exit 0, a clean pass from a script whose new branch never ran). Gates: pine-lint clean,
 validator 0 findings (selftest PASS), `pyne check` OK, `pyne run` OK with the gap memory pinned at 8
 and inverted zones created and deleted without error.
+
+## 14. The screenshot phase (2026-10-10): the candle-range layer, and the sources that defined its failures
+
+The brief was "new indicators or refining of what's existing to get the right tools", starting from the
+seven setup screenshots, with everything optional or toggleable. §11 of `tools/crt-candle-range-study.md`
+is the feature record; this section is the verification record.
+
+### What the round actually produced
+
+One layer in the existing file (`grp_crt`, 27 inputs, off by default), not a new script, for the
+three reasons in §4 of the study: the cadence matches (a state machine on one anchor candle per day),
+the object bill is nine moved objects rather than a per-day allocation, and the core needs no new
+`request.security` — the prior-day OHLC ladder, the 5-day ADR and the three-consecutive-close tests were
+folded into the `"D"` call the file already made as an 8-value tuple. Verified: `grep -c
+request.security` is still 3 across the whole file, and the validator's table/fixed-array census is
+unchanged apart from `dash` going 2×14 → 2×16.
+
+### Going to the sources instead of asking
+
+You asked whether I could find the failures myself, and pointed at the X pages. The fetch tool reaches
+x.com, so the accounts behind the screenshots were read directly, plus six public explainer pages and
+two library pages. The findings that changed the build:
+
+* **The failure definition was already in the corpus, and it is the right one.** `15-sessions/london-session-avoidance.md` is the April-2017 stand-aside list — the same year and session as this model's 01:00 anchor, established in §2 — and it is written as a disqualifier list "before any setup is looked for", with the consequence stated as inverted expectancy rather than reduced expectancy. Nine of its fourteen machine-readable criteria are computable in Pine; three are calendar facts and were left out on purpose.
+* **`Time Condition > Price Condition`** (@MadoCRT, 2026-10-08) is why the sweep window is a hard gate with its own switch, and why "no raid before the window closes" is a *counted outcome* (void), not silence.
+* **The three-gate stop list** (@SpeculatorFL, 2026-10-01: bias → key level and candle range → confirmation, each ending "No = stop/abandon") is the model's own failure taxonomy, and the top reply under it ("somehow the no always gets negotiated into a yes when you're bored") is why `crtOneShot` exists.
+* **The +3RR contradiction resolved itself.** crttrading.com's worked example is 50% of the range (partial, stop to breakeven) *then* the opposite bound, i.e. 1.6–2.8R realised — which is the 2.2R the screenshot's box actually measures. So "+3RR" is a ceiling label. The build defaults to the opposite bound, offers `50% then opposite bound` and `R multiple`, and prints the average R available at the bound so the convention is testable.
+* **`Model 1` is not definable from public material** — it is C³ course IP (launching 2026-10-15, "its own logic. Its own rules."). Naming our reconstruction after it would put their claim in our code, so the rules are named for what they do.
+* Every source that puts a number on the raw pattern puts it near a coin flip (~45% raw, ~60% with a HTF filter, ~60-65% with killzone + structure shift), and the two most careful say plainly that theirs is **not audited**. LuxAlgo's page is the most honest sentence in the whole literature: "No independent, published study tests it."
+
+### My own errors this round, kept in the record
+
+1. **The §6 spec was structurally impossible.** It had the raid happening *inside* the anchor candle
+   against *that candle's* bounds — at 01:30 those bounds are not finished, so there is nothing yet to
+   raid. Fixed: candle 1 is the reference (the 4H candle *ending* at the anchor hour), candle 2 is the
+   anchor, and the provisional-bounds reading survives only as an option named for the failure it causes.
+   A spec I wrote an hour earlier being wrong in its central mechanic is the reason the gate order is
+   run even on "just a doc" rounds.
+2. **One character, sixteen errors:** a comment line written as `# screenshots name, …` instead of `//`.
+   pine-lint localized it to one line; the *class* of it (a stray `#` in a .pine) was then grepped across
+   all five files. Nothing else had it.
+3. **I ran the un-patched patch.** A fix pass over the new block asserted, died, and therefore applied
+   none of its seven corrections — but the same `&&` chain then executed the original patch script, so
+   the *uncorrected* block landed in the file. The lesson in §13 ("a heredoc patch that asserts before its
+   write leaves the file untouched") had the corollary I had not written down: **never chain the target
+   script after a failing correction pass**; check the marker, then run.
+4. **Two anchor misses from whitespace.** `bool  crtRangeOk` vs `bool crtRangeOk`, and a wrapped line
+   indented by three spaces. Line-number surgery with asserts on *both* ends of the span caught the
+   second one before it did damage; the first wasted a cycle.
+5. **The forced-on run that would have passed.** With the harness sub for `crtOn = true`, the first
+   exercise returned a clean exit, a normal timing and `crtSeen=0`: pyne executes 1-day synthetic bars
+   whose clock never advances, so a time-anchored layer can compile, run and prove nothing. `crtTfOk`
+   (chart coarser than 4H → layer inert) was doing exactly what it should on that data.
+
+6. **I truncated the audit with my own patch.** `io.open(p,'w').write(io.open(p).read() + AUD)` looks
+   like an append and is a clobber: Python evaluates the write target (opening the file, truncating it)
+   *before* the read expression runs, so the read returned an empty string and 54 KB of §1–§13 became
+   §14 only. Recoverable in one command because the previous round was committed - which is the actual
+   control here, not my care: `git checkout -- tools/cisd-audit.md`. Rule for this repo: read into a
+   name, then open for writing. Never nest them on the same path.
+### The harness change that came out of error 5
+
+`tools/pine-gate-run.py` now has named exercise variants (`EXERCISES` + a shared `FORCE` sub list) and a
+**must-fire rule**: a variant that runs without moving its control counters prints `PROBLEM` and exits
+non-zero. A smoke test whose branch cannot run is not a pass, and this is the second time in this
+directory that a green result came from dead code — so the check is now structural, not a note in a doc.
+Two variants ship, both calibrated to fire against the positive control:
+
+```
+  fire  exercise crt daily reference              crtSeen=1  crtSwp=1  crtVoid=1  crtEnt=0
+  fire  exercise crt intra-anchor accumulator     crtSeen=1  crtSwp=1  crtEnt=1  crtNetR=-1  crtState=5
+```
+
+The first covers the daily-reference path and the arm → void transition; the second forces the
+provisional accumulator, the immediate-entry trigger, the object creation and mutation, the outcome walk
+(stop taken, −1R recorded), the stats and the two new table cells. Stand-aside and the range-size gates
+are switched *off* inside the variants and that is deliberate: with no real daily history under pyne they
+would reject every bar for the wrong reason, which is not a test of the machine.
+
+### Perf, measured rather than asserted
+
+Two states, same harness, same data, this session: at the shipped default (layer off) **691 ms → 654 ms**
+when the 2017 gates moved from every bar to once a day. In the forced-on exercise variants the same
+change is **10457 ms → 734 ms**. The per-bar cost was `dayofweek(time, tz)` plus `dayofmonth(time, tz)`
+and five float comparisons feeding a stand-aside verdict that, by the source's own words, is evaluated at
+midnight — a correctness reading that happened to be the optimisation. The same `if newNyDay or
+barstate.isfirst` block also fixed a real bug: `newNyDay` needs a previous bar to compare against, so on
+a chart shorter than one session the stand-aside list had never been evaluated at all.
+
+The daily-scoping is where the residual lives now: ~0.07 ms/bar of clock arithmetic and the reference
+accumulator, which run even with `crtOn` off. I could fold those into one `if crtOn` block and convert
+eight globals to `var`, and did not: that is the kind of change that manufactures state bugs, and it
+buys nothing measurable next to the 14× already taken.
+
+### Still not verified, said plainly
+
+* The time gates (`crtWinOpen`/`crtWinLen`/`crtDeliverH`) cannot be exercised under pyne at all — they
+  are checked statically and need one look on a real chart at 01:00 NY.
+* `pipSz` assumes 10 ticks = 1 pip (5-digit FX, 3-digit JPY, 2-digit indices). On a 4-digit feed or a
+  crypto pair with a different tick size the 50/40-pip stand-aside thresholds are wrong by 10×; the
+  thresholds are the only part of the layer with that assumption.
+* Whether any of this is *profitable* is untouched by this round: the counters now make the question
+  answerable in a journal, and `crtState` + `crtNetR` on 1200 synthetic bars is plumbing, not a result.

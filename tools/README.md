@@ -24,9 +24,15 @@ bash tools/pine-lint.sh tools/*.pine tools/archive/*.pine   # TV-parity type che
 python3 tools/pine-validate.py tools/*.pine tools/archive/*.pine
 python3 tools/pine-validate.py --selftest                    # the checker's must-fire control
 /home/user/venv/bin/pyne check tools/*.pine tools/archive/*.pine
-python3 tools/pine-gate-run.py tools/*.pine                  # build a runnable copy, execute, time
+python3 tools/pine-gate-run.py tools/*.pine                  # copy, execute, time, then the exercise variants
 python3 tools/lint.py                                          # the markdown corpus, unrelated to Pine
 ```
+
+The gate order now includes **calibrated exercises**: `pine-gate-run.py` re-runs each file's
+`EXERCISES` variants with the default-off layers forced on, and a variant whose control counters stay at
+zero fails the gate (`PROBLEM … ran but never fired`). That rule exists because a time-anchored layer on
+pyne's 1-day synthetic bars compiles, runs, times clean and executes nothing — a green result from dead
+code, twice in this directory.
 
 `pine-lint.sh` clones and builds [pine-tools](https://github.com/folknor/pine-tools) on first use;
 `pine-gate-run.py` needs `hoox-pyne` in `/home/user/venv` (rebuild recipe in audit §11). Both write

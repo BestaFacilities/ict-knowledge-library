@@ -82,12 +82,12 @@ PROBES = {
                                  'plot(box.count(), "boxes")', 'plot(label.count(), "labels")',
                                  'plot(invSeen, "inverted")'],
     "cisd-ultimate-balanced.pine": ['plot(array.size(ivTop), "izones")', 'plot(array.size(fvTop), "igaps")',
-                                    'plot(box.count(), "boxes")', 'plot(line.count(), "lines")',
+                                    'plot(box.count(), "boxes")', 'plot(line.count(), "lines")', 'plot(crtState, "crtState")', 'plot(crtSeen, "crtSeen")', 'plot(crtSweeps, "crtSwp")', 'plot(crtEntries, "crtEnt")', 'plot(crtVoids, "crtVoid")', 'plot(crtFiltered, "crtFilt")', 'plot(crtNetR, "crtNetR")',
                                     'plot(label.count(), "labels")'],
 }
 
 
-def build(src: Path, dst: Path) -> None:
+def build(src: Path, dst: Path, extra_subs=()) -> None:
     text = src.read_text(encoding="utf-8")
     text = text.encode("ascii", "ignore").decode("ascii")
 
@@ -108,9 +108,53 @@ def build(src: Path, dst: Path) -> None:
         for old, new in SUBS:
             if old in lines[i]:
                 lines[i] = lines[i].replace(old, new)
+    for ln_i, ln in enumerate(lines):
+        for ex_old, ex_new in extra_subs:
+            if ex_old in ln:
+                lines[ln_i] = ln.replace(ex_old, ex_new, 1)
+                break
     lines += PROBES.get(src.name, []) + [""]
     dst.write_text("\n".join(lines), encoding="utf-8")
 
+
+# Named exercise variants, applied on top of SUBS, one extra run each. They exist because a
+# default-off layer on a 1-day synthetic chart can compile, run, time out clean and execute NONE of
+# its code: pyne's bars are 86400s, so `hour(time)` never moves and the 4H clock path is inert by
+# construction. Each variant therefore has to FIRE, and a variant that runs without firing is
+# reported as a failure rather than a pass - that is the whole point of this file.
+# pyne runs the script on 1-day synthetic bars whose clock is UTC-ish and drifts with DST, so a
+# default-off, time-anchored layer can compile, run, time clean and execute NONE of its code - the
+# exact failure this file was written to prevent. Each variant therefore (a) switches the layer on,
+# (b) switches off the gates pyne cannot serve, and (c) has to FIRE: a variant that runs without
+# firing is reported as a PROBLEM and exits non-zero, because a branch that never ran is not a test.
+FORCE = [('crtOn       = input.bool(false,', 'crtOn       = input.bool(true,'),
+         ('crtSA       = input.bool(true,', 'crtSA       = input.bool(false,'),
+         ('crtTimeHard = input.bool(true,', 'crtTimeHard = input.bool(false,'),
+         ('crtRangeMin = input.float(0.30,', 'crtRangeMin = input.float(0.0,'),
+         ('crtRangeMax = input.float(1.20,', 'crtRangeMax = input.float(3.0,'),
+         ('crtGateCore = input.bool(false,', 'crtGateCore = input.bool(true,'),
+         ('scCrt       = input.bool(false,', 'scCrt       = input.bool(true,'),
+         # stand-aside needs real daily history and the delivery/bias rules are measured FROM the
+         # anchor open: left on, they reject every bar for the wrong reason.
+         ('crtDeliverH = input.int(8,', 'crtDeliverH = input.int(0,'),
+         ('crtBias     = input.string("HTF bias",', 'crtBias     = input.string("None",')]
+
+EXERCISES = {
+    "cisd-ultimate-balanced.pine": [
+        ("crt daily reference",
+         FORCE + [('crtRef      = input.string("Prev 4H candle",',
+                   'crtRef      = input.string("Prev daily candle",')],
+         ["crtSeen", "crtSwp"]),
+        ("crt intra-anchor accumulator",
+         FORCE + [('crtRef      = input.string("Prev 4H candle",',
+                   'crtRef      = input.string("Intra-anchor (provisional bounds)",'),
+                  ('crtAnchorH  = input.int(1,', 'crtAnchorH  = input.int(0,'),
+                  ('crtEntry    = input.string("Anchor open retest",',
+                   'crtEntry    = input.string("On the close back inside",'),
+                  ('bool  crtTfOk  = crtRef', 'bool  crtTfOk  = true or crtRef')],
+         ["crtSeen", "crtSwp", "crtEnt"]),
+    ],
+}
 
 def run_copy(p: Path, bars: int, reps: int = 3):
     """pyne reports elapsed_ms for the script itself, which is the number worth comparing -
@@ -179,6 +223,23 @@ def main() -> int:
         counts = "  ".join("%s=%g" % (k, v) for k, v in sorted(runs[0][2].items()))
         print("  ok  script %6.0f ms (wall %6.0f ms best of %d) @ %d bars   %s   table: %s"
               % (ms, min(r[1] for r in runs), len(runs), bars, counts, runs[0][3]))
+        for name, extra, must in EXERCISES.get(src.name, []):
+            vdst = Path("/tmp") / ("gate-%s.pine" % re.sub(r"\W+", "-", name))
+            build(src, vdst, extra)
+            wall, rc, out, err = run_copy(vdst, bars, reps=1)[0]
+            if rc != 0:
+                rc_all = 1
+                print("  FAIL exercise %s rc=%d\n%s\n%s" % (name, rc, out[-1200:], err[-2000:]))
+                continue
+            vms, vplots, _ = parse(out)
+            vs = "  ".join("%s=%g" % (k, v) for k, v in sorted(vplots.items()))
+            dead = [k for k in must if vplots.get(k, 0) <= 0]
+            if dead:
+                rc_all = 1
+                print("  PROBLEM exercise %-32s ran but never fired (%s) - it tests nothing: %s"
+                      % (name, ", ".join(dead), vs))
+            else:
+                print("  fire  exercise %-32s %5.0f ms   %s" % (name, vms or -1, vs))
     return rc_all
 
 

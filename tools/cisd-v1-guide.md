@@ -92,3 +92,75 @@ Verification that ran on this revision: pine-lint (TV-parity type checker) clean
 `tools/pine-validate.py` 0 findings with `--selftest` PASS · `pyne check` OK · `pyne run` 1200 bars,
 gap memory at its cap, inverted zones created and deleted without error. None of that certifies the
 *signals* — see `tools/cisd-audit.md` §9d for what the reference runtime cannot tell you.
+
+## 5. The 4H candle-range layer (`grp_crt`) — added 2026-10-10, off by default
+
+This is the screenshot phase's build: the reference-candle model in `tools/crt-candle-range-study.md`
+(the 4H-candle range, the 01:30 NY raid, the daily OHLC ladder, the stand-aside list). **27 switches, and
+the layer does nothing until you switch `Use a reference candle's range as the day's grid` on** — including
+`crtGateCore` and `scCrt`, the only two hooks into the CISD core, both off, so your existing signals and
+scores are bit-for-bit what they were. The daily ladder was folded into the `"D"` call the file already
+made, so this layer costs **no additional `request.security`** (still 3 total).
+
+### The recipe for the 01:30 raid, which is what the screenshots describe
+
+1. Chart: EURUSD or GBPUSD, **15m or 1h**, and your clock must be New York (`GMT-4`/`GMT-5`). The
+   reference is built from the NY clock inside the script, so a 17:00-anchored template and a
+   00:00-anchored one agree — but the *hour you type in* is only meaningful if the timezone setting is
+   New York. Check it once; `17:00` labels on your 4H candles are the tell that it is.
+2. `Reference range` = **Prev 4H candle**. This is candle 1 of the classic definition. At 01:30 the
+   01:00 candle's bounds are not finished, so the thing being raided is the candle that *ended* at 01:00.
+3. `Anchor candle opens at this NY hour` = **1**, `window opens N min after` = **0**,
+   `length` = **90**. Their printed example is a sweep at 01:30 = 30 minutes in; 90 keeps the whole
+   first hour and a half. `No raid inside the window = no setup` stays on — that rule is the model's
+   own ("Time Condition > Price Condition").
+4. `Direction filter` = **HTF bias** (their checklist's step 1 is "daily bias or stop"),
+   `Entry trigger` = **Anchor open retest** (the "4H Key" in their panels *is* the anchor open),
+   `Target` = **Opposite bound**, `Stop` = **Sweep extreme**.
+5. Leave `Apply the 2017 stand-aside list` **on**. It is the failure catalogue: prior-day range over
+   2× the 5-day ADR, CBDR over 50 pips, Asian range over 40 pips, a move already running from 20:00
+   NY, no overnight consolidation, three consecutive daily closes against the direction. When one of
+   them is true the panel says which one and the layer stays quiet — that is the whole point of it.
+6. For iFVG-at-the-open work, set `Entry trigger` = **iFVG tap** instead of step 4's retest: the raid
+   arms the setup and the inverted zone is where you take it. That is the one element of their model
+   this file already had machinery for.
+
+### What the two new panel rows mean
+
+`4H CRT` is the state and the three levels: `watching the bounds`, `armed — waiting for the trigger`,
+`live`, `delivered`, `stopped`, `void`, or `STAND ASIDE: <which condition>`. `CRT why` is the last thing
+that happened plus the running record — `W/L/be/void` counts, net R, the win rate off entries taken, and
+**the average R that was available at the opposite bound**, which is the number that tells you whether
+the "+3RR" label in those posts is real on your pair (on the prices printed in the screenshot it is
+about 2.2R, and the community ladder of 50%-then-bound lands 1.6–2.8R, which is what the box measures).
+
+### Alerts
+
+Four conditions, so the failures are alertable too: `CRT bound raided and accepted back`, `CRT entry`,
+`CRT outcome (target or stop)`, `CRT void / abandoned`. If you want the stand-aside day as an alert,
+alert on the void condition and read the panel: the raid that never happens and the day that was never
+tradeable both end there.
+
+### Deliberately not built
+
+* **Weekly market profile** — Pine has no TPO/profile object. A bar-count "value area" wearing that
+  name would be the one thing on the panel that teaches you something false; use TradingView's Volume
+  Profile instead.
+* **`Model 1` as a name** — it is @MadoCRT's course material (C³, launched 2026-10-15), never defined
+  publicly. The rules the charts actually show are implemented and named for what they do.
+* **SMT divergence** — needs the sibling symbol on your plan. The working module is in
+  `tools/archive/mx-context-overlay.pine` and can be lifted in one pass if you have the data.
+* **Three of ICT's eight stand-aside conditions** (a named holiday, an unscheduled driver, the count of
+  scheduled events) need an economic calendar Pine cannot read. The first-Friday proxy for NFP defaults
+  to *Mark only* rather than blocking, because a date rule is not a calendar.
+
+### Cost
+
+Measured on the current harness (1200 bars, best of 3) with the layer **off**, which is the shipped
+default: **691 ms as first written, 654 ms after moving the 2017 gates to once a day**. With the layer
+**on** in the exercise variants the same two states are **10457 ms and 734 ms** — a 14× difference from
+one change, because `dayofweek`/`dayofmonth` and five comparisons per bar were doing the work of a
+per-day evaluation. Both numbers are pyne's, not TradingView's (see audit §9d on what the reference
+runtime can and cannot certify), and they are not comparable with the 567 ms recorded in §13: that run
+predates seven new probes and the exercise machinery in `pine-gate-run.py`. The last measured figure for
+this file in this harness, with the candle-range code compiled in but switched off, is **654 ms**.
