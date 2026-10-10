@@ -13,6 +13,7 @@ editor. Everything else here is either documentation, verification tooling, or a
 | `cisd-ultimate-balanced.pine` | the working indicator: CISD detector + iFVG registry + time engine (killzones, Silver Bullet hours, macro cores, NY AM opening range) + zone map. |
 | `cisd-v1-guide.md` | how to use it: every switch and its default, the iFVG-at-the-open recipe, the panel legend, measured cost. |
 | `cisd-audit.md` | the running record: what was found wrong in each revision, how it was verified, what the reference runtime cannot certify (§9d), and one section per round. Read §1-§2 for why the pasted v1's Noise Filter and sweep test could not do what their labels said. |
+| `crt-candle-range-study.md` | the current phase: the 4H-candle-range / 01:30-sweep breakdowns you sent, inventoried element by element against the corpus, with the extend-vs-new verdict, the build spec (all switches named), and what I recommend not building. |
 | `mx-setups-study.md` | the setup inventory: what a reference set of iFVG/HTF-array screenshots actually contains, feature by feature, with the extend-vs-new build decision and the object/`request.security` budget that follows from it. This is the page the current phase (screenshots → new or refined tools) starts from. |
 | `archive/` | set aside, not deleted: `cisd-ultimate-proper-v2.pine` (+ its guide) and `mx-context-overlay.pine` (+ its guide), the superseded `cisd-ultimate-journal.pine`, and `cisd-ultimate-balanced.pristine-v1.pine`, which is v1 exactly as it arrived so any decision in §13 of the audit can be reversed. |
 
