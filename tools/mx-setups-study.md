@@ -179,3 +179,97 @@ bars are contiguous (`low > high[1]` never true), so a genuine 3-bar gap cannot 
 `ta.pivothigh` returns na — the FVG and pivot paths only *execute* there, they cannot be *scored*.
 Nothing here is a signal-rate claim: the panel's `Passed n/7` and the grade string are a count, and §6
 is the week-long comparison against your own letters that would earn the right to call it a grade.
+
+## 8. Killzone level projections (screenshot of 2026-10-12, NQ 15m, `KZP [TFO]`) — inventory and plan
+
+### What the picture contains, element by element
+
+| element | read of it | do we have it |
+|---|---|---|
+| five shaded spans (ASIA / LNDN / NYAM / NYPM + one orange) | the standard killzone windows, NY-anchored, drawn over the price | yes, as *time* (`f_win` on `nyMin`, lines 630-646) - never as an object |
+| `ASIA High` / `ASIA Low` in blue, `LNDN High/Low` red, `NYAM High/Low` teal, `NYPM High/Low` magenta, `NYL High/Low` orange | each session's extreme, one label per level, colour = session | **no**. No session high/low is computed anywhere in the file |
+| dotted blue line from Friday's `ASIA Low` running to the right edge | the level **survives its session** and is projected until taken - i.e. an unmitigated draw on liquidity | no |
+| solid red `LNDN High` stopping mid-chart | a level that was taken stops being drawn (mitigated) | no |
+| orange span at ~12:00 with `NYL High/Low` | a sub-window treated as its own range (midday / lunch, or the 08:00 range) | partially: `useOR` builds 08:00 + `orLenMin` and marks `orHiTaken` / `orLoTaken`, but draws no line and projects nothing |
+| `PDL` badge with a lightning glyph, Monday 07:00 | prior-day low, flagged as hit | **already computed and never drawn**: `pd_high` / `pd_low` come back from the daily `request.security` tuple at line 259 |
+| axis at 03:00 / 09:00 / 14:30 with boxes between them | the sessions are wall-clock NY, so the whole overlay is timeframe-independent | same property our time engine already has |
+
+### Why this is not cosmetic
+
+The sources in the corpus put a *named level* in the chain, not a recent pivot: "Daily Bias → **DOL** → Key
+Levels → 4H CRT → LTF Confirmation" (@ONESTrades), and Sham's gate is "2. key level and candle range? No =
+stop". Our `require_liq_sweep` today (lines 1467 / 1523) is `bars_since_high <= liqLook and close <
+last_wicked_high_level` - a statement about how recently a wick happened, with no opinion about *whose*
+high it was. So the useful half of this screenshot is not the boxes, it is the ability to say
+"swept the Asian high, closed back inside" as a condition, which is also exactly the CRT raid semantics the
+`grp_crt` layer already implements against *one* range. This is that same test pointed at five ranges.
+
+### Build verdict: extend `cisd-ultimate-balanced.pine`, new group `grp_kzl`, default off
+
+Not a separate script. Reasons, all concrete: the clock (`nyMin`), the acceptance semantics
+(`crtAccept` / `sweepStrict` / `sweepWick`), the score plumbing (`sc*` inputs) and the panel all exist; a
+second indicator would duplicate the session math with nothing to disagree about, and TV's drawing caps are
+per-instance but so is the clutter. Cost: **zero** extra `request.security` calls (currently 3 of 40) -
+session extremes are accumulated in the bar loop from the same `f_win` booleans, so they inherit the
+timeframe-adaptation property for free.
+
+| input | default | note |
+|---|---|---|
+| `kzlOn` | false | one switch off = today's behaviour exactly, same as `crtOn` |
+| `kzlSessions` | `Asia, London, NY AM` (multi via per-session bools or a string) | reuse the five existing `kz_*` flags rather than adding five more - decide at build time |
+| `kzlProject` | `Until taken` | `Until taken` / `Today only` / `N sessions` |
+| `kzlMitigate` | `Close through` | `Wick through` = touched; `Close through` = accepted. Same fork as the CRT acceptance debate, one vocabulary across the file |
+| `kzlMinBars` | 6 (5m reference, **rescaled with `f_sc`**) | a session that produced 6 bars is not a range; this is the parameter that would otherwise make the overlay mean something different on every timeframe, so it goes through the machinery from audit §15 |
+| `kzlDrawLabels` | right-edge only | 10 labels per day at both bounds and both colours is how a clean chart becomes wallpaper |
+| `require_kzl_sweep`, `scKzl`, `kzlGateCore` | false | gate and score contribution are separate switches, per the standing rule |
+
+Drawing budget, before building rather than after: **levels go in `line.new` with `extend.right`** (one
+object per unmitigated level, self-extending, so no per-bar redraw loop), and **session spans go in
+`bgcolor`**, not `box.new` - `max_boxes_count` is 80 *shared with the FVG and OB registries*, and box
+starvation is an error class this file has already been audited for twice. Expected steady state: about 10
+lines and 5 background tints, versus 30 boxes if I had drawn them as ranges, and it cannot crowd out a live
+FVG.
+
+### Alerts and panel
+
+Two `alertcondition`s per session pair is 10 - too many; ship `KZL level raided (wick, closed back)` and
+`KZL level taken (closed through)` as two conditions with the session named in a runtime `alert()` message,
+matching the four existing message alerts, which already carry tier/price/SL in text. Panel rows: `KZL
+levels` (count live, e.g. `3 unmitigated`) and `KZL last` (which level, taken or swept, and at what price) -
+the "why not / what happened" discipline from `crtWhyCode` applies, so a refusal is legible rather than
+silent.
+
+### Verification plan (the CRT round's lesson applied up front)
+
+pyne's synthetic run sits at `hour=0 minute=39` on 1-day bars, so `f_win` is false for every session and
+this layer would compile, run, time clean and execute nothing - the exact green-result-from-dead-code
+failure this repo has been burned by twice. So the harness exercise will **sub the clock**, not the
+thresholds:
+
+    int nyMin = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+    int nyMin = 150 + (bar_index % 2) * 600        // harness only: in-London / out-of-London, alternating
+
+That flips a session boundary every other bar, so the accumulators roll over, a prior-session level exists,
+and a later bar can sweep it - which makes `kzlSeen > 0` and `kzlSwp > 0` genuine must-fire keys rather than
+aspirational. What it still cannot certify, and the doc will say so: that 02:00-05:00 is the *right* window
+for the symbol on your feed. That one needs your eyes on a live session, same as the 01:00 NY anchor.
+
+### What I am deliberately not copying
+
+- The always-on per-level price labels at the right edge of every line: it is 10 labels a day of numbers the
+  axis already shows. One label per session bound, killed when the level is taken.
+- A `PDL/PDH` module as its own feature: `pd_high`/`pd_low`/`pd_open`/`pd_close` are already in the tuple at
+  line 259, so drawing them is a few lines inside `kzlOn`. Two caveats worth checking against your feed
+  first, though: on CME futures the daily bar is the Globex day (18:00-17:00 ET), so "prior day" is not
+  midnight-to-midnight, and on index *CFD* feeds the London window may simply not exist in the data - expect
+  an empty box, not a bug.
+- The dotted-line look. `line.style_dashed` with `extend.right` is free; a per-bar extension loop is not.
+
+### Not a claim
+
+No source in this corpus, and none of the pages fetched for the CRT round, publishes a win rate for "sweep
+of an unmitigated killzone extreme". What this build buys is a *sharper definition* of the level the sweep
+test points at - which is the class of change that has repeatedly been worth more here than another filter,
+and it is exactly the kind of change that has also repeatedly been wrong on first contact with a live
+chart. It ships behind `kzlOn`, it is off by default, and the panel will say what it thinks.
+
