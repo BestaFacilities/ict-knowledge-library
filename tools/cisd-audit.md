@@ -1115,3 +1115,64 @@ predate both added layers and were counted with that round's tooling; the honest
 this layer adds no security call and no plot, which are the two caps that bite on a script this size. And
 §9d's standing limit holds: an exercise firing proves the path executes, not that the window is right for your
 symbol and feed - which is why step 10 of guide §7 is still unpaid.
+
+## 18. Making the level layer customizable (2026-10-13, second build of the day)
+
+**The request, from a real chart.** The user pasted an MNQ 5m screenshot with `kzlOn` on - hundreds of levels made, a few dozen
+raided, the dashes and the panel doing their job - and asked for "fully customizable. colors,
+name of zones, positions, etc". The layer had six hard-coded colours, six hard-coded names, five
+hard-coded windows, one hard-coded label placement and a `bgcolor` at 35 transparency, which on a 5m chart is
+wallpaper. Also one hard-coded panel corner that has nothing to do with killzones and was never anyone's
+choice.
+
+**What is now an input** (23 in a `Killzone levels: colours, names, windows` group, plus `Dashboard position`
+in `Appearance`): six names, two bound words, six colours, five window strings, live line style and width,
+shade transparency, label position, label size, label price. Nothing was renamed or removed; the four
+behaviour inputs are untouched, so a saved template from the build this morning still means the same thing.
+
+**Three decisions worth the ink they cost.**
+
+1. *The windows default to empty, not to the times.* `""` means "use the killzone window this file already
+   computes", which keeps `kzl_londonWin` and the `wLondon` gate in step **by construction** rather than by
+   the user re-typing `02:00-05:00` and getting it subtly wrong. Overriding decouples them, and the tooltip
+   says that in the same breath as the format, because the failure mode of a decoupled London is a level you
+   trust at a time you did not mean.
+2. *Parse it, then refuse it.* `f_kzMins` accepts `HH:MM` or exactly four digits and nothing else, so `9` is
+   not 09:00 - it is refused. Being lenient here means a session silently shifted by nine hours, which is a
+   number someone will trade. A refusal keeps the default, bumps `kzlBadWin`, and prints `!N window refused`
+   in orange on the panel row. `f_kzApplyWin` returns 0/1/2 because a v6 function may not assign a global
+   (§5 rule 8, learned four hours ago in §17), so the counters are summed at the call site.
+3. *Only the live state is decoration.* `Live level style` styles the live line; raided stays dashed + one
+   unit thicker and taken stays dotted grey with the projection cut off, because those two are the state that
+   the whole layer exists to expose. A customisable state machine is not a customisable look, it is a way to
+   make the information unreadable.
+
+**One default changed that is not behind a switch: the shade transparency, 35 → 88.** The rule in this repo is
+that a look-only change may land on as long as it is called out, and this one is called out here, in the
+guide's table, and in the input's tooltip. It changes nothing for anyone who has not switched the layer on;
+for the two of us who have, the bands go from paint-box to tint. `Session shading transparency` is the
+one-line answer if 88 is too faint for a projector.
+
+**Verified how.** `pine-lint` clean - which is worth stating because `input.string` fed into `str.pos`,
+`str.replace_all` and `str.substring` is exactly the const-qualifier class that has bitten this file before,
+and the compiler checked the qualifiers rather than me guessing them. `pine-validate` CLEAN with
+`--selftest` PASS (the LADDER-GAP rule matters here: two new `options=` inputs, `Live level style` and
+`Label position`, plus `Dashboard position` with six rungs - all six are compared, so no option is a
+button that does nothing). `pyne check` OK. Then the harness grew three probes (`kzlBadWin`, `kzlWinCust`,
+`kzlLblTick`) and a seventh exercise that overrides nine of the new inputs at once: `Asia window = "02:30-12:30"`
+matched to the substituted clock so `kzlWinCust` can only fire if the parser fed the registry;
+`NY AM window = "7 o'clock"` deliberately unreadable, and the exercise's must-fire list requires **both**
+`kzlBadWin > 0` **and** `kzlSeen > 0` - a refused input that also killed the session would pass a test with
+only the first key, and a validator that swallows errors would pass one with only the second.
+`Label position = At the right edge` drove `kzlLblTick` to 8948 label updates, the empty upper-bound word
+exercised the no-word label path, `Shade transparency = 0` and `Dashboard position = Bottom left` were
+carried through `table.new`. 7/7 exercises fire, and the default run's counters are identical to §17's,
+which is the sentence that proves the customization is additive.
+
+**Still the user's, and still honest.** No TradingView compile. Colours, sizes, transparency, label position
+and panel corner are *rendered* things: pyne executed the branches and counted the calls, and cannot tell you
+whether the tint now reads well over your candle style or whether `tiny` labels survive a laptop at 4H zoom.
+The `f_kzTag` wording change moved the alert and panel text from `LNDN high` to `LNDN High` (or to whatever
+the words inputs say); if you have alert webhooks keying on the old string, that is the one thing here that
+could surprise a machine rather than an eye.
+

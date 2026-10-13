@@ -184,7 +184,10 @@ is the week-long comparison against your own letters that would earn the right t
 
 > **Status 2026-10-13: P1 of this plan is built** in `tools/cisd-ultimate-balanced.pine` - group `grp_kzl`,
 > 13 inputs, default off, guide §8, record in audit §17. P2 (the score and the gate consuming a level, and
-> the setup models) is not, and nothing in this section should be read as if it were. Two deviations, both
+> the setup models) is not, and nothing in this section should be read as if it were. A second build the same
+> day made the layer customizable on request - colours, names, the five windows themselves, label text and
+> placement, shade strength, the dashboard corner (audit §18). The window inputs are empty by default, which is
+> what keeps "the level layer and the killzone gate share their times" true unless someone decouples them. Two deviations, both
 > deliberate and both written into the source where they would otherwise be mistaken for an oversight:
 > per-session `kzl_s_*` switches rather than the five `kz_*` gate flags, and a `kzlRaid` must-fire key that
 > needed `sweepStrict` relaxed to fire on synthetic bars (see the plan below: it predicted `kzlSwp > 0`

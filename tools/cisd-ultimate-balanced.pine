@@ -1,5 +1,5 @@
 //@version=6
-indicator("CISD Ultimate Balanced · build 2026-10-13-killzone", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
+indicator("CISD Ultimate Balanced · build 2026-10-13-kzlcust", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
 
 // ═══════════════════════════════════════════════════════════════════
 // PRESET SYSTEM
@@ -144,6 +144,8 @@ show_candles = input.bool(true, "Overlay painted candles in the trend colour", g
 hide_expired_levels   = input.bool(true, "Hide Expired Levels", group="Appearance")
 spentMax     = input.int(24, "Keep up to N spent levels visible", minval=0, maxval=200, group="Appearance", tooltip="The leak this replaces: taken levels were dropped from the array but only deleted from the chart when 'Hide Mitigated Levels' was on, which defaulted to off - so every taken level stayed on the chart forever, up to max_lines_count, after which TradingView starts evicting the OLDEST objects, live ones included. 0 = delete on take, as it should have been.")
 show_dashboard        = input.bool(true, "Show Dashboard", group="Appearance")
+dashPosIn             = input.string("Top right", "Dashboard position", options=["Top right", "Top left", "Bottom right", "Bottom left", "Top center", "Bottom center"], group="Appearance", tooltip="The panel used to be nailed to the top right corner, which is also where the price scale and the session levels want to live. Bottom left is the one that stops it covering the recent bars.")
+string dashPos = dashPosIn == "Top right" ? position.top_right : dashPosIn == "Top left" ? position.top_left : dashPosIn == "Bottom right" ? position.bottom_right : dashPosIn == "Bottom left" ? position.bottom_left : dashPosIn == "Top center" ? position.top_center : dashPosIn == "Bottom center" ? position.bottom_center : position.top_right
 
 // ═══════════════════════════════════════════════════════════════════
 // APPLY PRESET
@@ -718,7 +720,7 @@ bool orOkBear = not orGate or orHiTaken
 // the object-budget argument for the shape of this layer: tools/mx-setups-study.md section 8.
 grp_kzl = "======= Killzone levels (optional) ======="
 kzlOn         = input.bool(false, "Track each session's high and low as a level", group=grp_kzl, tooltip="OFF by default, like every added layer. This is the draw-and-count half: it puts the session bounds on the chart as lines that survive their session, marks them raided or taken, and tells you which. Nothing in the CISD score or gate consults it until a later build lets it.")
-kzl_s_asia    = input.bool(true, "Asia levels (20:00-00:00 NY)", group=grp_kzl)
+kzl_s_asia    = input.bool(true, "Asia levels", group=grp_kzl, tooltip="On = the 20:00-00:00 NY window becomes a pair of levels when it closes. Which window, what it is called and what it looks like are in the look group below.")
 kzl_s_london  = input.bool(true, "London levels", group=grp_kzl)
 kzl_s_nyam    = input.bool(true, "New York AM levels", group=grp_kzl)
 kzl_s_loncls  = input.bool(false, "London close levels", group=grp_kzl)
@@ -728,8 +730,41 @@ kzlProject    = input.string("Until taken", "Projection", options=["Until taken"
 kzlMitigate   = input.string("Close through", "A level is taken when", options=["Wick through", "Close through"], group=grp_kzl, tooltip="'Close through' matches the sweep definition this file already uses everywhere else (02-liquidity/liquidity-sweep.md: a sweep wicks, BOS closes) and needs no extra switch to stay consistent. 'Wick through' retires a level the first time price pokes past it, which is the other school and also what 'Touch only' does to the candle-range layer.")
 kzlMinBars    = input.int(6, "A session must span at least this many bars", minval=1, group=grp_kzl, tooltip="Read as a 5-minute reference and rescaled like every other bar count (audit section 15), because a 2-bar 'session' on a 1H chart is not a range, it is a print. Also the guard against an empty window on an index CFD feed, where the London session may simply not exist in the data.")
 kzlMaxLive    = input.int(12, "Live levels kept", minval=2, maxval=40, group=grp_kzl, tooltip="Five sessions, two bounds, a day and a half is ten. Past this the oldest are dropped, so the count is bounded whatever the timeframe.")
-kzlDrawLabels = input.bool(true, "Name each level at its session edge", group=grp_kzl, tooltip="One label per level, fixed where the session ended, and never moved again - not a price tag re-stamped at the right edge every bar, which is the other way to do it and costs a label update per level per bar for the rest of the chart.")
+kzlDrawLabels = input.bool(true, "Label each level", group=grp_kzl, tooltip="Where the label goes, what it says and how big it is are all inputs below. A live level costs nothing per bar in the default placement; 'At the right edge' is the one option that does cost, and its tooltip says how much.")
 kzlShade      = input.bool(true, "Shade the session that is forming", group=grp_kzl, tooltip="bgcolor, on purpose: the session spans would otherwise be boxes, and max_boxes_count is 80 shared with the FVG and order-block registries, where box starvation has already been an audited failure in this file.")
+// The inputs above are what the layer MEANS. Everything in the group below is how it looks and
+// where its times come from, and it is a separate group because "fully customizable" is a real
+// request, not a polish job: colour, name, window, label text, label position, line style, line
+// width, shading strength. The windows default to EMPTY, meaning "use the killzone window this
+// file already computes", so the shipped behaviour needs no re-typing of times - and a window you
+// do type is validated, never trusted: unusable text is ignored, counted, and named on the panel
+// row instead of quietly moving a session by nine hours.
+grp_kzl2 = "======= Killzone levels: colours, names, windows ======="
+kzl_asiaNam   = input.string("ASIA", "Asia label", group=grp_kzl2)
+kzl_londonNam = input.string("LNDN", "London label", group=grp_kzl2)
+kzl_nyamNam   = input.string("NYAM", "New York AM label", group=grp_kzl2)
+kzl_lonclsNam = input.string("LNCL", "London close label", group=grp_kzl2)
+kzl_nypmNam   = input.string("NYPN", "New York PM label", group=grp_kzl2)
+kzl_pdNam     = input.string("PD", "Prior-day label", group=grp_kzl2)
+kzl_hiWord    = input.string("High", "Word for the upper bound", group=grp_kzl2, tooltip="The label reads '<session> <word>'. 'H', 'hi' or empty all work; empty drops the word and leaves the name alone.")
+kzl_loWord    = input.string("Low", "Word for the lower bound", group=grp_kzl2)
+kzl_asiaCol   = input.color(color.blue, "Asia colour", group=grp_kzl2, tooltip="The picker's own alpha is honoured on the lines and labels; the background shade has its own strength input below.")
+kzl_londonCol = input.color(color.red, "London colour", group=grp_kzl2)
+kzl_nyamCol   = input.color(color.teal, "New York AM colour", group=grp_kzl2)
+kzl_lonclsCol = input.color(color.orange, "London close colour", group=grp_kzl2)
+kzl_nypmCol   = input.color(color.purple, "New York PM colour", group=grp_kzl2)
+kzl_pdCol     = input.color(color.gray, "Prior-day colour", group=grp_kzl2)
+kzl_asiaWin   = input.string("", "Asia window (NY)", group=grp_kzl2, tooltip="Empty = 20:00-00:00, the window this file already gates on. Format HH:MM-HH:MM or HHMM-HHMM; an end earlier than the start means the window runs past midnight. Write midnight as 00:00, not 24:00 - the parser takes 00-23 only. Anything it cannot read is ignored, counted on the panel, and never guessed at.")
+kzl_londonWin = input.string("", "London window (NY)", group=grp_kzl2, tooltip="Empty = 02:00-05:00, or 01:00-05:00 on the 2017 killzone set. Leaving it blank is what keeps the levels and the gate on the same London; setting it decouples them, which is a legitimate thing to want and a legitimate thing to have to remember.")
+kzl_nyamWin   = input.string("", "New York AM window (NY)", group=grp_kzl2, tooltip="Empty = 08:00-11:00, or 07:00-10:00 on the 2017 set.")
+kzl_lonclsWin = input.string("", "London close window (NY)", group=grp_kzl2, tooltip="Empty = 10:00-12:00.")
+kzl_nypmWin   = input.string("", "New York PM window (NY)", group=grp_kzl2, tooltip="Empty = 13:30-16:00.")
+kzlLineStyle  = input.string("Solid", "Live level style", options=["Solid", "Dashed", "Dotted"], group=grp_kzl2, tooltip="Only the live state is yours. A raided level goes dashed and thicker and a taken one goes dotted, grey and cut off at the bar that closed through it, because those two are the state of the level and not its decoration - which is also the whole reason this layer is worth having.")
+kzlLineW      = input.int(1, "Live level width", minval=1, maxval=4, group=grp_kzl2)
+kzlShadeTransp = input.int(88, "Session shading transparency", minval=0, maxval=97, group=grp_kzl2, tooltip="The first build painted the forming session at 35, which reads as stained glass on a 5m chart - 88 is the same information without the wallpaper. 0 is full paint and will hide your candles.")
+kzlLblPos     = input.string("At the session edge", "Label position", options=["At the session edge", "At the right edge"], group=grp_kzl2, tooltip="Right edge means one label move per live level per bar: at most 'Live levels kept' (12) calls a bar, bounded but not free, and the level then follows you as you scroll. Session edge is placed once and never touched again.")
+kzlLblSize    = input.string("tiny", "Label size", options=["tiny", "small", "normal"], group=grp_kzl2)
+kzlLblPrice   = input.bool(false, "Put the price in the label", group=grp_kzl2, tooltip="Off because the line is already at its price and the scale carries the number. On, the label reads 'ASIA High 20815.0'. The alert text carries the price either way.")
 // Per-session switches rather than reusing the five kz_* killzone flags, which was the plan in
 // tools/mx-setups-study.md section 8. Reading the two against each other changed my mind: kz_asia off
 // means 'do not signal in Asia', not 'the Asian range is irrelevant', and the second is exactly what a
@@ -762,9 +797,52 @@ f_kzWinAB(int a, int b) =>
 f_kzSel(int s) =>
     s == 0 ? kzl_s_asia : s == 1 ? kzl_s_london : s == 2 ? kzl_s_nyam : s == 3 ? kzl_s_loncls : kzl_s_nypm
 f_kzNam(int s) =>
-    s == 5 ? "PD" : s == 0 ? "ASIA" : s == 1 ? "LNDN" : s == 2 ? "NYAM" : s == 3 ? "LNCL" : "NYPN"
+    s == 5 ? kzl_pdNam : s == 0 ? kzl_asiaNam : s == 1 ? kzl_londonNam : s == 2 ? kzl_nyamNam : s == 3 ? kzl_lonclsNam : kzl_nypmNam
 f_kzCol(int s) =>
-    s == 5 ? color.new(color.gray, 35) : s == 0 ? color.new(color.blue, 35) : s == 1 ? color.new(color.red, 35) : s == 2 ? color.new(color.teal, 35) : s == 3 ? color.new(color.orange, 35) : color.new(color.purple, 35)
+    s == 5 ? kzl_pdCol : s == 0 ? kzl_asiaCol : s == 1 ? kzl_londonCol : s == 2 ? kzl_nyamCol : s == 3 ? kzl_lonclsCol : kzl_nypmCol
+// One place builds 'LNDN High', so the label, the panel row and the alert message cannot drift
+// apart when a user renames the session or the word.
+f_kzTag(int sid, int dir) =>
+    string w = str.trim(dir > 0 ? kzl_hiWord : kzl_loWord)
+    f_kzNam(sid) + (w == "" ? "" : " " + w)
+f_kzStyle() =>
+    kzlLineStyle == "Solid" ? line.style_solid : kzlLineStyle == "Dashed" ? line.style_dashed : kzlLineStyle == "Dotted" ? line.style_dotted : line.style_solid
+f_kzSize() =>
+    kzlLblSize == "tiny" ? size.tiny : kzlLblSize == "small" ? size.small : kzlLblSize == "normal" ? size.normal : size.tiny
+// 'HH:MM' or 'HHMM' to minutes past 00:00 New York. Unforgiving on purpose: '9' is not 09:00 here,
+// because a session silently re-read nine hours off is worse than a window refused and reported.
+f_kzMins(string t) =>
+    string raw = str.trim(t)
+    string s = str.replace_all(str.replace_all(raw, ":", ""), " ", "")
+    bool colon = str.contains(raw, ":")
+    float v = nz(str.tonumber(s), -1.0)
+    bool lenOk = colon ? str.length(s) == 3 or str.length(s) == 4 : str.length(s) == 4
+    int n = int(v)
+    int hh = int(math.floor(n / 100))
+    int mm = n - hh * 100
+    lenOk and hh >= 0 and hh <= 23 and mm >= 0 and mm <= 59 ? hh * 60 + mm : na
+f_kzSetWin(int s, int a, int b) =>
+    array.set(kzA, s, a)
+    array.set(kzB, s, b)
+    1
+f_kzApplyWin(string spec, int s) =>
+    // 0 = this file's killzone window kept, 1 = custom window applied, 2 = refused as unreadable.
+    string t = str.trim(spec)
+    int dash = t == "" ? -1 : str.pos(t, "-")
+    int a = dash > 0 ? f_kzMins(str.substring(t, 0, dash)) : na
+    int b = dash > 0 ? f_kzMins(str.substring(t, dash + 1, str.length(t))) : na
+    t == "" ? 0 : na(a) or na(b) or a >= b ? 2 : f_kzSetWin(s, a, b)
+var int kzlBadWin  = 0
+var int kzlWinCust = 0
+var int kzlLblTick = 0
+if barstate.isfirst
+    int w0 = f_kzApplyWin(kzl_asiaWin, 0)
+    int w1 = f_kzApplyWin(kzl_londonWin, 1)
+    int w2 = f_kzApplyWin(kzl_nyamWin, 2)
+    int w3 = f_kzApplyWin(kzl_lonclsWin, 3)
+    int w4 = f_kzApplyWin(kzl_nypmWin, 4)
+    kzlBadWin := (w0 == 2 ? 1 : 0) + (w1 == 2 ? 1 : 0) + (w2 == 2 ? 1 : 0) + (w3 == 2 ? 1 : 0) + (w4 == 2 ? 1 : 0)
+    kzlWinCust := (w0 == 1 ? 1 : 0) + (w1 == 1 ? 1 : 0) + (w2 == 1 ? 1 : 0) + (w3 == 1 ? 1 : 0) + (w4 == 1 ? 1 : 0)
 f_kzDrop(int i) =>
     line xl = array.get(kzLn, i)
     label yl = array.get(kzLb, i)
@@ -783,8 +861,8 @@ f_kzDrop(int i) =>
 // variable' - so the counter belongs to the call sites, which guard the same way this does.
 f_kzPush(float y, int sid, int dir) =>
     if kzlOn and not na(y)
-        line l = line.new(bar_index, y, bar_index + 1, y, color=f_kzCol(sid), width=1, extend=extend.right)
-        label lb = kzlDrawLabels ? label.new(bar_index + 1, y, f_kzNam(sid) + (dir > 0 ? " High" : " Low"), style=label.style_label_left, color=color.new(color.black, 100), textcolor=f_kzCol(sid), size=size.tiny) : na
+        line l = line.new(bar_index, y, bar_index + 1, y, color=f_kzCol(sid), width=kzlLineW, style=f_kzStyle(), extend=extend.right)
+        label lb = kzlDrawLabels ? label.new(kzlLblPos == "At the right edge" ? bar_index : bar_index + 1, y, f_kzTag(sid, dir) + (kzlLblPrice ? " " + str.tostring(y, format.mintick) : ""), style=label.style_label_left, color=color.new(color.black, 100), textcolor=f_kzCol(sid), size=f_kzSize()) : na
         array.unshift(kzY, y)
         array.unshift(kzSid, sid)
         array.unshift(kzDir, dir)
@@ -833,6 +911,11 @@ if kzlOn and array.size(kzY) > 0
         if stale
             f_kzDrop(i)
         else if st != 2
+            if kzlDrawLabels and kzlLblPos == "At the right edge"
+                label mv = array.get(kzLb, i)
+                if not na(mv)
+                    label.set_x(mv, bar_index)
+                    kzlLblTick += 1
             bool touched = dir > 0 ? high >= y : low <= y
             bool through = dir > 0 ? close > y : close < y
             line l = array.get(kzLn, i)
@@ -845,22 +928,22 @@ if kzlOn and array.size(kzY) > 0
                     line.set_style(l, line.style_dotted)
                 kzlTake += 1
                 kzlEvTake := true
-                kzlLast := f_kzNam(sid) + ' ' + (dir > 0 ? 'high' : 'low') + ' ' + str.tostring(y, format.mintick) + ' closed through'
+                kzlLast := f_kzTag(sid, dir) + ' ' + str.tostring(y, format.mintick) + ' closed through'
             else if st == 0 and (dir > 0 ? f_sweepHi(y) : f_sweepLo(y))
                 array.set(kzSt, i, 1)
                 if not na(l)
                     line.set_style(l, line.style_dashed)
-                    line.set_width(l, 2)
+                    line.set_width(l, math.max(2, kzlLineW + 1))
                 kzlRaid += 1
                 kzlEvRaid := true
-                kzlLast := f_kzNam(sid) + ' ' + (dir > 0 ? 'high' : 'low') + ' ' + str.tostring(y, format.mintick) + ' raided, closed back inside'
+                kzlLast := f_kzTag(sid, dir) + ' ' + str.tostring(y, format.mintick) + ' raided, closed back inside'
 while array.size(kzY) > kzlMaxLive
     f_kzDrop(array.size(kzY) - 1)
 color kzlShadeCol = na
 if kzlOn and kzlShade
     for sw = 0 to 4
         if array.get(kzAct, sw)
-            kzlShadeCol := f_kzCol(sw)
+            kzlShadeCol := color.new(f_kzCol(sw), kzlShadeTransp)
 bgcolor(kzlShadeCol)
 if kzlOn and (kzlEvRaid or kzlEvTake)
     alert('KZL ' + kzlLast + ' | ' + str.tostring(array.size(kzY)) + ' live | ' + syminfo.ticker + ' ' + timeframe.period + ' | ' + tier, alert.freq_once_per_bar)
@@ -1894,7 +1977,7 @@ if analysis == ""
     analysis := "Clear"
 
 if show_dashboard and barstate.islast
-    var table dash = table.new(position.top_right, 2, 18, bgcolor=color.new(#0d0d0d, 15), border_width=1)
+    var table dash = table.new(dashPos, 2, 18, bgcolor=color.new(#0d0d0d, 15), border_width=1)
     table.cell(dash, 0, 0, "CISD Ultimate", text_color=color.white, text_size=size.small)
     table.cell(dash, 1, 0, tier + ' / ' + timeframe.period + (tfScaled ? ' x' + str.tostring(tfScale, '#.####') : preset == "Custom" ? ' windows as written' : ' no bar duration here'), text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
@@ -1927,7 +2010,7 @@ if show_dashboard and barstate.islast
     table.cell(dash, 1, 14, (crtNote == "" ? "no change this bar" : crtNote) + (crtPerf == "" ? "" : "\n" + crtPerf) + (crtFri == "Mark only" and isNfpFri ? "\nfirst Friday (NFP day) - marked, not blocked" : "") + (crtSkips > 0 ? "\n" + str.tostring(crtSkips) + " day(s) stood aside" : "") + (crtFiltered > 0 ? " / " + str.tostring(crtFiltered) + " raids filtered out" : ""), text_color=color.white, text_size=size.tiny)
     table.cell(dash, 1, 12, ifvgMode == "Off" or ifvgMode == "Track only" ? "no entries" : ifvg_bull ? "LONG " + str.tostring(iv_entry, format.mintick) : ifvg_bear ? "SHORT " + str.tostring(iv_entry, format.mintick) : "none this bar", text_color=ifvg_bull or ifvg_bear ? green : color.gray, text_size=size.tiny)
     table.cell(dash, 0, 15, "KZL levels", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 15, not kzlOn ? "layer off" : str.tostring(array.size(kzY)) + " live / " + str.tostring(kzlSeen) + " made / " + str.tostring(kzlRaid) + " raided / " + str.tostring(kzlTake) + " taken", text_color=kzlRaid > 0 or kzlTake > 0 ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 15, not kzlOn ? "layer off" : str.tostring(array.size(kzY)) + " live / " + str.tostring(kzlSeen) + " made / " + str.tostring(kzlRaid) + " raided / " + str.tostring(kzlTake) + " taken" + (kzlBadWin > 0 ? " / !" + str.tostring(kzlBadWin) + " window refused" : ""), text_color=kzlBadWin > 0 ? color.orange : kzlRaid > 0 or kzlTake > 0 ? green : color.gray, text_size=size.tiny)
     table.cell(dash, 0, 16, "KZL last", text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 1, 16, not kzlOn ? "layer off" : kzlLast == "" ? "no level tested yet" : kzlLast, text_color=color.white, text_size=size.tiny)
 

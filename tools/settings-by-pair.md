@@ -38,7 +38,10 @@ the FVG freshness window (10 bars), the order-block freshness window (12), the 2
 range, and the killzone level layer's session minimum (`kzlMinBars`).
 
 **Still yours, on any pair, at any timeframe.** `pipSz`-denominated caps, the session you trade, your
-key levels, news times, the SMT sibling symbol, whether the CRT layer is on at all (`crtOn`, default
+key levels, news times, the SMT sibling symbol, the killzone level **windows** if you fill them in - they are
+empty by default precisely so this bucket stays empty, and an index CFD whose Asia really is 19:00-23:00 on
+your feed should say so there rather than in a re-tuned `expiry_bars` - and where the dashboard sits
+(`Dashboard position`), which is a chart-layout question that used to be answered for you, whether the CRT layer is on at all (`crtOn`, default
 **off**), and whether the killzone level layer is (`kzlOn`, default **off**). See section 4.
 
 ## 2. What "auto" actually picks

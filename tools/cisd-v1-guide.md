@@ -45,6 +45,7 @@ defaults to "wrong" is a trap; everything that adds *behaviour* is opt-in:
 | session extremes and the prior day's bounds as raidable levels | `Track each session's high and low as a level` | off - §8 |
 | which sessions are pooled, and whether PDH/PDL join them | five per-session booleans + `Add the prior day's high and low` | Asia / London / NY AM on, London close / NY PM off, PDH/PDL on |
 | how a level dies, and how long it waits | `A level is taken when` / `Projection` | `Close through` / `Until taken` |
+| colours, names, session windows, label text and placement, line style, shade strength, dashboard corner | `Killzone levels: colours, names, windows` group + `Dashboard position` | every default is the behaviour of the build before it, except the shade transparency (35 → 88, look only) - §8 |
 
 Fixed with no switch, because they were simply wrong: the pivot detector now runs on `high`/`low`
 instead of the default `hlc3` while the level drawn was `high[len]`/`low[len]`; the entry marks are
@@ -245,7 +246,7 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    nothing happened".
 3. **Paste and add.** Chart → bottom panel → Pine Editor → New Script → replace everything → Save As
    `CISD Ultimate Balanced` → Add to chart.
-4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-killzone`**.
+4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-kzlcust`**.
    The tag is bumped whenever the file changes, so this step is a fact and not a guess; if the legend shows the old string you are looking at
    the old compile, and nothing you conclude from that chart is about this file.
 5. **Choose the chart.** `EURUSD` or `GBPUSD`, 5m or 15m, is what everything here is tuned and verified for.
@@ -255,7 +256,7 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    the code (see the two `ny_hour`/`nyMin` blocks), so 01:00 means 01:00 New York whatever your account
    settings say. There is no timezone option to find, and "the panel is wrong because my TV is set to Paris"
    is not a thing that can happen here.
-6. **Read the first panel row.** It should say `5min / 5 x1` on a 5-minute chart, `15min / 15 x0.3333` on a
+6. **Read the first panel row.** It is in the top right unless you moved it (`Dashboard position`). It should say `5min / 5 x1` on a 5-minute chart, `15min / 15 x0.3333` on a
    15-minute one. That row is the auto-tier feature: it tells you which ladder you got and whether the windows
    were rescaled, so you never have to remember what you set. `windows as written` means `preset = Custom`,
    `no bar duration here` means a chart type with no timeframe.
@@ -314,9 +315,11 @@ would move signals on charts that only wanted the drawing.
   NY AM, London close, NY PM, plus `PDH`/`PDL` if `Add the prior day's high and low` is on. A session has
   to have spanned `A session must span at least this many bars` or nothing is created, which is also what
   stops a thin index CFD feed that never prints London from inventing a London range.
-* each level is an `extend.right` line with one small label at the session edge (`ASIA High`, `NYAM Low`).
-  The label is placed once and never moved, and a live level costs **zero** object calls per bar - which is
-  the only reason a 500-line budget can carry days of levels at once.
+* each level is an `extend.right` line with one small label at the session edge (`ASIA High`, `NYAM Low`,
+  or whatever you called that session and its bounds). In that default placement the label is written once and
+  never touched again, so a live level costs **zero** object calls per bar - which is the only reason a
+  500-line budget can carry days of levels at once. `Label position = At the right edge` buys a tag that
+  follows the chart, at one `label.set_x` per live level per bar, capped at `Live levels kept`.
 * three states, because the distinction is the whole information: **live** (solid), **raided and held**
   (dashed and thicker: price took out the level and closed back inside, the sweep the model wants),
   **taken** (dotted and grey, the line cut off at the bar that closed through it, no longer projected).
@@ -341,10 +344,11 @@ would move signals on charts that only wanted the drawing.
 
 ### Panel and alerts
 
-`KZL levels` reads `N live / M made / R raided / T taken` for the life of the chart, and `KZL last` names
-the most recent event (`LNDN high 1.1742 raided, closed back inside`). The conditions are `KZL level raided
+`KZL levels` reads `N live / M made / R raided / T taken` for the life of the chart - plus `!1 window refused`
+in orange if a time you typed could not be read - and `KZL last` names the most recent event in the words you
+chose (`LNDN High 1.1742 raided, closed back inside`). The conditions are `KZL level raided
 and rejected` and `KZL level taken`; the runtime message is one `alert()` in the shape of
-`KZL ASIA low 20815.0 closed through | 9 live | NQ 15 | 15min`, which is what the "Any alert() function
+`KZL ASIA Low 20815.0 closed through | 9 live | NQ 15 | 15min`, which is what the "Any alert() function
 call" recipe in §7 picks up. Raid and take are counted separately on purpose: a day that is all takes is a
 day where the levels are run through, and a day that is all raids is a day where every poke at liquidity
 fails - those are not the same trading day, and they are not the same next trade.
@@ -361,6 +365,34 @@ fails - those are not the same trading day, and they are not the same next trade
    nobody asked for.
 3. **Not a setup model.** There is no "Asian high raided + short bias ⇒ entry" here. That is P2, and it
    earns its place by measurement, not because the lines are now drawn.
+
+### The look and the times (added 2026-10-13, in the same round as the layer)
+
+A screenshot came back with "needs to be fully customizable: colours, name of zones, positions". Fine -
+the paint is not the part worth arguing about, so it is all inputs now, in a group of their own
+(`======= Killzone levels: colours, names, windows =======`):
+
+| label | default | note |
+|---|---|---|
+| `Asia label` … `Prior-day label` | `ASIA`, `LNDN`, `NYAM`, `LNCL`, `NYPN`, `PD` | the name goes in the label, the panel row and the alert text, from one function, so the three cannot disagree |
+| `Word for the upper bound` / `…lower…` | `High` / `Low` | `H`, `hi`, or empty - empty leaves the bare session name |
+| `Asia colour` … `Prior-day colour` | blue, red, teal, orange, purple, grey | the picker's own alpha applies to lines and labels; the shade has its own strength below |
+| `Asia window (NY)` … `New York PM window (NY)` | empty | empty = the killzone window this file already computes, so nothing to re-type. Otherwise `HH:MM-HH:MM` or `HHMM-HHMM`, New York, and an end earlier than the start means it runs past midnight |
+| `Live level style` / `Live level width` | `Solid` / 1 | only the *live* state is yours; raided goes dashed and thicker, taken goes dotted grey and capped, because those two are the state of the level |
+| `Session shading transparency` | 88 | the layer's first build painted at 35, which on a 5m chart is stained glass. This is the one visual default I changed outright, and it is a look change only |
+| `Label position` | `At the session edge` | `At the right edge` follows the level as you scroll, at one `label.set_x` per live level per bar - bounded by `Live levels kept`, not free |
+| `Label size` / `Put the price in the label` | `tiny` / off | the price on the label is redundant with the scale; on if you screenshot charts for other people |
+| `Dashboard position` (in `Appearance`, not this group) | `Top right` | the panel used to be nailed to the top right corner, which is also where the recent bars and the level labels want to live |
+
+**A refused window is refused loudly, on purpose.** `02:30-12:30` parses; `7 o'clock` does not, and the
+parser's answer is to keep this file's own window, count the refusal, and print `!1 window refused` in orange
+on the `KZL levels` row. It will not silently read `9` as 09:00 instead of 00:09, because a session moved nine
+hours is a level you will trade, not a bug you will notice.
+
+Overriding London or NY AM *decouples* the levels from the killzone gate, which now share the same defaults
+but are no longer the same numbers. That is a legitimate thing to want (a 15m trader may pool London
+01:00-08:00 while gating signals 02:00-05:00) and a legitimate thing to have to remember, so the tooltip says
+it rather than the docs being the only place it is written.
 
 ### Cost, and what has not been verified
 

@@ -85,7 +85,9 @@ PROBES = {
                                     'plot(box.count(), "boxes")', 'plot(line.count(), "lines")', 'plot(crtState, "crtState")', 'plot(crtSeen, "crtSeen")', 'plot(crtSweeps, "crtSwp")', 'plot(crtEntries, "crtEnt")', 'plot(crtVoids, "crtVoid")', 'plot(crtFiltered, "crtFilt")', 'plot(crtNetR, "crtNetR")', 'plot(crtWhyCode, "crtWhy")',
                                     'plot(label.count(), "labels")',
                                     'plot(kzlSeen, "kzlSeen")', 'plot(kzlRaid, "kzlRaid")',
-                                    'plot(kzlTake, "kzlTake")', 'plot(array.size(kzY), "kzlLv")'],
+                                    'plot(kzlTake, "kzlTake")', 'plot(array.size(kzY), "kzlLv")',
+                                    'plot(kzlBadWin, "kzlBadWin")', 'plot(kzlWinCust, "kzlWinCust")',
+                                    'plot(kzlLblTick, "kzlLblTick")'],
 }
 
 
@@ -240,6 +242,33 @@ EXERCISES = {
           # default stands on a real chart, where 89% of the hits closed through and are counted as takes.
           ('sweepStrict = input.bool(true,', 'sweepStrict = input.bool(false,')],
          ["kzlSeen", "kzlRaid", "kzlTake"]),
+        # The look group (colours, names, windows, label placement, panel position) is not decoration to
+        # take on trust: every one of those inputs has a branch, and a branch that never runs is exactly
+        # the defect this file was written to catch. Same clock sub as the exercise above, plus three
+        # overrides that each prove something different. '02:30-12:30' is a VALID custom window that
+        # matches the alternating clock, so kzlWinCust fires only if the parser fed the registry.
+        # "7 o'clock" is deliberately unreadable: kzlBadWin must come back non-zero, and kzlSeen must
+        # STILL fire, which is the pair that proves a refused window is refused quietly rather than
+        # taking the session (or the script) down with it. 'At the right edge' drives kzlLblTick, the
+        # one branch with a per-bar cost, and the empty upper-bound word drives the label-text path.
+        # A taken level's dotted grey style and a raided one's dashed weight are then re-set on objects
+        # built in the user's style, which no counter sees - read that part as 'it ran', not 'it looked right'.
+        ("killzone levels: custom windows, look, refused input",
+         [('kzlOn         = input.bool(false,', 'kzlOn         = input.bool(true,'),
+          ('kzlMinBars    = input.int(6,', 'kzlMinBars    = input.int(1,'),
+          ('int nyMin = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")',
+           'int nyMin = 150 + (bar_index % 2) * 600'),
+          ('kzl_asiaWin   = input.string("",', 'kzl_asiaWin   = input.string("02:30-12:30",'),
+          ('kzl_nyamWin   = input.string("",', 'kzl_nyamWin   = input.string("7 o\'clock",'),
+          ('kzlLblPos     = input.string("At the session edge",',
+           'kzlLblPos     = input.string("At the right edge",'),
+          ('kzl_hiWord    = input.string("High",', 'kzl_hiWord    = input.string("",'),
+          ('kzlLblPrice   = input.bool(false,', 'kzlLblPrice   = input.bool(true,'),
+          ('kzlLineStyle  = input.string("Solid",', 'kzlLineStyle  = input.string("Dotted",'),
+          ('kzlShadeTransp = input.int(88,', 'kzlShadeTransp = input.int(0,'),
+          ('dashPosIn             = input.string("Top right",',
+           'dashPosIn             = input.string("Bottom left",')],
+         ["kzlSeen", "kzlWinCust", "kzlBadWin", "kzlLblTick"]),
     ],
 }
 
