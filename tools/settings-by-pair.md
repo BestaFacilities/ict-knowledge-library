@@ -91,6 +91,13 @@ input's ceiling, so the inverted-zone layer scans a quarter of a thousand bars p
 `liqLook` at 30m/1H floors at 3 bars, which is a thinner liquidity check than the 5m chart gets, not a
 stronger one.
 
+**One correction to section 2, found on 2026-10-12 (audit §16).** That table was, for one row, describing a
+branch that did not exist: the ladder's `3min` rung read `tier == "%s"` after the rename, so a 1m/2m/3m chart
+selected the tier, printed it, and applied nothing - `tolerence` 0.55, `len` 8, `signal_cooldown` 5,
+`atr_mult_sl` 0.40, `near_atr_mult` 2.5 were unreachable. It is fixed, so the table is now true, and 1m-3m
+charts get the faster filter set the ladder always said they should. That is the only change in this build
+that is not behind a switch, because the switch (`preset = Auto`) was already nominally on.
+
 ## 3. What genuinely differs per pair
 
 Everything size-related in this script is expressed either in **ticks** (`syminfo.mintick`) or in
@@ -133,6 +140,7 @@ agree on the ordering; the row below is that agreement, not a measurement.
 | session | what to set | why |
 |---|---|---|
 | London open, 02:00-05:00 NY | `kz_london` on, `kz_asia` off, `crtAnchorH` 1, `crtAnchorLen` 240 | the 01:00 NY 4H anchor, the 01:30 sweep in the screenshots, the 90-minute window |
+| the hourly checkpoints (02:00 / 03:00 / 05:00 / 09:00 / 13:00) | `crtAnchorLen` 60 **and** `Anchor cadence` = `Every reference candle` | cadence at `Once per day` (the default) is one anchor per day; that is what the first build could do, and `crtAnchorLen` alone did not buy what its tooltip implied |
 | New York open, 08:30-11:00 NY | `kz_ny` on, `useOR` on, `orGate` on if you want the 08:00 range as a pool | the 08:00 opening range and the 09:00-11:00 sweep window are already the defaults there |
 | Asia | `kz_asia` on, and expect nothing | the CRT sources are blunt: manipulation ranges in Asia on 1m-5m charts carry near-zero edge; the honest setting is "watch, do not trade" |
 | after 16:00 NY | leave `stopHour` 16 | one bar of thin session should not create a BEST label |

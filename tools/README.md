@@ -24,7 +24,7 @@ editor. Everything else here is either documentation, verification tooling, or a
 ```bash
 bash tools/pine-lint.sh tools/*.pine tools/archive/*.pine   # TV-parity type checker (primary)
 python3 tools/pine-validate.py tools/*.pine tools/archive/*.pine
-python3 tools/pine-validate.py --selftest                    # the checker's must-fire control
+python3 tools/pine-validate.py --selftest                    # must-fire controls: a fixture AND a real bug
 /home/user/venv/bin/pyne check tools/*.pine tools/archive/*.pine
 python3 tools/pine-gate-run.py tools/*.pine                  # copy, execute, time, then the exercise variants
 python3 tools/lint.py                                          # the markdown corpus, unrelated to Pine
@@ -50,6 +50,11 @@ checkpoint that awards itself a point — that class is what the audit sections 
 * TradingView caches the compiled build per script name: after an edit, delete the indicator
   instance and re-add it, and check the build tag in the legend before debugging anything else.
 * Fix error *classes* across the whole file, not the line the editor pointed at.
+* `pine-validate.py --selftest` is anchored on `tools/tests/ladder-bug.control.pine` - the actual broken
+  ladder rung, transcribed out of the shipped file - and it fails if that file ever validates clean. A
+  derivative checker that only proves its own fixture is decoration. The literal-class rules
+  (TEMPLATE-LEAK, TAUTOLOGY, LADDER-GAP) are suppressed for `archive/`: those files are frozen baselines the
+  audit needs kept byte-identical, and the point of keeping them is that nobody fixes them.
 * **Settings guidance is part of the build.** Any input added, renamed or re-defaulted in
   `cisd-ultimate-balanced.pine` comes with an update to `settings-by-pair.md` and to §1/§6 of
   `cisd-v1-guide.md`, and a re-run of `tf-scale-table.py` if it is a bar count. A per-pair matrix nobody

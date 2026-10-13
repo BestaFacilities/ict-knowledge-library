@@ -30,6 +30,9 @@ defaults to "wrong" is a trap; everything that adds *behaviour* is opt-in:
 | public vs 2017 killzone set | `Killzone set` | Public 2022 |
 | London close + NY PM windows | their own booleans | off |
 | no new signals after hour N | `No new signals after this NY hour` | 16 (off) |
+| that cutoff, applied to iFVG entries too (the gate read `(not clockOk or true)`, a term that cannot fail) | `Apply the after-hours cutoff to inverted entries` | **on** - behaviour change, one toggle from off |
+| target = the session that FINISHED, not the one still printing | `Target the finished session's extreme` | **on** - moves the drawn target; the live accumulator includes the current bar |
+| the reference candle re-rolls inside the day (the hourly-anchor reading) | `Anchor cadence` | `Once per day` - opt-in, §6 |
 | NY AM opening range as a pool | `Use the 08:00 opening range as a pool` | off |
 | entries gated on an opening-range sweep | `Require an opening-range sweep` | off |
 | strict sweep (wick through **and** close back inside) | `Sweep = wick through AND close back inside` | **on** |
@@ -193,6 +196,11 @@ Three things to hold on to:
 * On a 5m chart the new default is a **no-op**: the scale is exactly 1 and every derived window lands on
   the number the inputs already carried. Nothing about the signals changed for the chart the file was
   tuned on, which is what made it safe to re-default.
+* **1m / 2m / 3m charts do change, and that is the fix, not the feature.** The ladder's first rung had been
+  renamed to `if tier == "%s"` - a placeholder that matches nothing - so a 3-minute chart selected the `3min`
+  tier, printed it on the panel, and applied the input values instead (0.55 / len 8 / cooldown 5 / 0.40 /
+  2.5 were unreachable). Audit §16 has the attribution; `pine-validate.py` now refuses the class, against a
+  control file that is the real defect rather than a fixture.
 * It **selects a tier, it does not interpolate**. The ladder is hand-tuned per timeframe by the source
   material and is not linear in time, so a 20m chart gets the `30min` tier rather than an invented average.
   `60min`, `240min` and `1D` are my extrapolation of the trend, not tuning from a source, and nothing at

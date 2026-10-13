@@ -191,6 +191,27 @@ EXERCISES = {
         ("preset Custom: the unscaled escape hatch",
          [('"Auto from chart", "Timeframe Preset"', '"Custom", "Timeframe Preset"')],
          ["igaps", "izones"]),
+        # The anchor-cadence path (audit s16, defect 8) is a real branch, and it has to be executed, not
+        # just compiled. What this run can prove is narrow and is worth stating: the reference runtime sits
+        # at a frozen nyMin=39 with 1-day bars, so with the anchor forced to 00:00 the segment index never
+        # advances and crtRollNow is only ever evaluated false. That exercises the build condition, the
+        # crtRolled gate on crtReady and the reset plumbing; it cannot exercise an actual re-roll, which no
+        # synthetic clock here can produce. Do not read this variant as proof that hourly anchors deliver -
+        # read it as proof that turning cadence on does not break the machine.
+        ("anchor cadence: every reference candle",
+         [('crtOn       = input.bool(false,', 'crtOn       = input.bool(true,'),
+          ('crtAnchorH  = input.int(1,', 'crtAnchorH  = input.int(0,'),
+          ('"Once per day", "Anchor cadence"', '"Every reference candle", "Anchor cadence"'),
+          # The guard that made the first attempt of this variant fire nothing: crtTfOk refuses a reference
+          # range coarser than 4H, and the reference runtime's chart IS 1-day. Widening the parameter is
+          # allowed here; widening the *logic* (an `or true`) is what TEMPLATE-LEAK/TAUTOLOGY exist to stop,
+          # and on a real 5m-15m chart the guard passes untouched.
+          ('timeframe.in_seconds() <= 14400', 'timeframe.in_seconds() <= 86400')],
+         # crtSeen + crtState, deliberately not crtSwp: on a frozen clock the accumulated reference is
+         # never raided before the delivery expiry (it reports crtWhy=1, "no raid before the window
+         # closed"), which is the correct verdict for that data. Proving the re-roll reaches a verdict is
+         # this variant's job; proving a sweep fires belongs to variants 1-3, where it is required.
+         ["crtSeen", "crtState"]),
     ],
 }
 

@@ -1,0 +1,30 @@
+//@version=6
+// NOT A SHIPPING SCRIPT - this is the checker's negative control. tools/pine-validate.py --selftest
+// must find at least three literal-class findings here (TAUTOLOGY, TEMPLATE-LEAK, LADDER-GAP x2); a
+// version of this file that validates clean means a rule was weakened, and the rule's whole job is to
+// catch exactly this. The lines are transcribed from the real defect in audit §16: the timeframe
+// ladder's first rung was renamed from `preset` to `tier` and the literal came out as "%s", so the
+// 3min tier selected fine, printed on the panel, and applied nothing.
+indicator("ladder-bug control")
+preset = input.string("Auto from chart", "Timeframe Preset", options=["Auto from chart", "3min", "5min", "15min", "Custom"])
+float tfSec = timeframe.in_seconds()
+string tier = preset == "Custom" ? "custom" : preset
+if tfSec <= 300
+    tier := "5min"
+else if tfSec <= 900
+    tier := "15min"
+float tolerence = 0.60
+int   len = 10
+if tier == "%s"
+    tolerence := 0.55
+    len := 8
+else if tier == "5min"
+    tolerence := 0.60
+    len := 10
+else if tier == "15min"
+    tolerence := 0.63
+    len := 11
+bool gateOn = input.bool(true, "Gate")
+bool inWindow = tfSec > 0
+bool ok = gateOn and (not inWindow or true)
+plot(ok ? len : na, "len")

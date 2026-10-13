@@ -8,7 +8,7 @@ This file exists because that oracle has to be cloned and built, so it is not al
 rules below are the subset of what it caught that we can also prove statically. `pyne check` (the
 pynescript ANTLR front-end) validates SYNTAX only — every one of those 68 passed `pyne check`.
 
-Eight rules, each motivated by a real failure we actually shipped and had to fix:
+Eleven rules, each motivated by a real failure we actually shipped and had to fix:
 
   LOOP-CLAMP   A counted `for i = a to b` takes its DIRECTION from a vs b and always runs at
                least once. `for i = array.size(x) - 1 to 0` on an EMPTY array therefore executes
@@ -42,6 +42,8 @@ Usage:  python3 tools/pine-validate.py tools/*.pine
         python3 tools/pine-validate.py --selftest
 """
 import re
+import os
+import os
 import sys
 
 FOR = re.compile(r"^(\s*)for\s+(\w+)\s*=\s*(.+?)\s+to\s+(.+?)\s*$")
@@ -336,11 +338,118 @@ def _lockstep_unused(lines):
     return out
 
 
+def nospeech(lines):
+    """Comments stripped, string CONTENTS kept - the three literal-aware rules need to read what is
+    inside the quotes, and every other rule must not."""
+    out = []
+    for ln in lines:
+        if re.match(r"^\s*//", ln):
+            out.append(" " * len(ln))
+            continue
+        k = ln.find("//")
+        out.append(ln[:k] if k >= 0 else ln)
+    return out
+
+
+FMT_LEAK = re.compile(r"%[sd]\b|%\(|(?<!\{)\{(?!\{)[^{}]{0,24}\}(?!\})|\.format\(|__\w+__")
+
+
+def template_leaks(lines):
+    """TEMPLATE-LEAK  a Python/C format placeholder sitting inside a Pine string literal. This is the
+    bug that shipped for weeks: the v1 file arrived with `if preset == "%s"` from whoever's notebook it
+    was pasted out of, so that whole rung of the timeframe ladder was unreachable and the panel still
+    printed the tier name as if it had applied."""
+    out = []
+    for n, ln in enumerate(nospeech(lines)):
+        for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', ln):
+            bad = FMT_LEAK.search(m.group(1))
+            if bad:
+                out.append(f"{n + 1:5d}  TEMPLATE-LEAK  {m.group(0)} carries the placeholder "
+                           f"{bad.group(0)!r}: a Pine string is a literal, so this value can never be "
+                           f"produced or matched - it is a paste artifact")
+    return out
+
+
+TAUTO_OR = re.compile(r"\bor\s+true\b|\band\s+false\b")
+
+
+def tautologies(lines):
+    """TAUTOLOGY  a boolean term that cannot fail. `(not clockOk or true)` reads like a gate, is
+    always true, and was quietly defeating the after-hours cutoff on iFVG entries while looking like it
+    enforced it. Matched on code only (strings blanked) so prose about 'always true' cannot trip it."""
+    out = []
+    for n, ln in enumerate(code_lines(lines)):
+        m = TAUTO_OR.search(ln)
+        if m:
+            out.append(f"{n + 1:5d}  TAUTOLOGY  '{m.group(0).strip()}' makes the whole condition "
+                       f"{'unfailable' if m.group(0).startswith('or') else 'unsatisfiable'} - either "
+                       f"drop the term or make it a real switch")
+    return out
+
+
+OPTS_RX = re.compile(r"^(\w+)\s*=\s*input\.string\((.*)\)")
+LIT_RX = re.compile(r'"([^"]*)"')
+CMP_RX = re.compile(r'\b([A-Za-z_]\w*)\s*(?:==|!=)\s*"([^"]*)"')
+LAD_RX = re.compile(r'^\s*(?:if|else if)\s+([A-Za-z_]\w*)\s*==\s*"([^"]*)"')
+ASS_RX = re.compile(r"^\s*(?:var\s+)?(?:string|int|float|bool)?\s*(\w+)\s*=\s*(.+)$")
+
+
+def ladder_gaps(lines):
+    """LADDER-GAP  an if/else-if ladder that dispatches on a string input, checked against that input's
+    options in both directions: an option no rung ever matches (silently selects nothing, while the UI
+    offers it and the panel reports it), and a rung no option can ever select (dead code that reads like a
+    tier). Ladders are only judged for inputs they actually dispatch on, so a mode string whose middle
+    value is only ever tested with != (ifvgMode) is not accused."""
+    code = nospeech(lines)
+    opts, cmts, chain, refs = {}, {}, {}, {}
+    for ln in code:
+        m = OPTS_RX.match(ln.strip())
+        if m and "options=[" in m.group(2):
+            inside = m.group(2).split("options=[", 1)[1].split("]", 1)[0]
+            opts[m.group(1)] = [x for x in LIT_RX.findall(inside)]
+        for cm in CMP_RX.finditer(ln):
+            cmts.setdefault(cm.group(1), set()).add(cm.group(2))
+        lm = LAD_RX.match(ln)
+        if lm:
+            chain.setdefault(lm.group(1), set()).add(lm.group(2))
+        am = ASS_RX.match(ln)
+        if am:
+            refs[am.group(1)] = am.group(2)
+    out = []
+    for var, choices in opts.items():
+        reach = {var}
+        for _ in range(3):  # follow one or two derivation hops (preset -> tier)
+            for v, rhs in refs.items():
+                if v in reach or not re.search(r"\b%s\b" % re.escape(var), rhs or ""):
+                    continue
+                if any(re.search(r"\b%s\b" % r, rhs or "") for r in reach):
+                    reach.add(v)
+        rung = set().union(*[chain[v] for v in reach if v in chain]) if any(v in chain for v in reach) else set()
+        # A `if x == "a" ... else <residual>` is not a dispatch table: the residual IS the remaining
+        # option, so accusing it of ignoring an option would be wrong (crtTgt's "Opposite bound",
+        # crtFri's "Off"). Require a real ladder - three or more named rungs - before judging coverage.
+        if len(rung) < 3:
+            continue
+        compared = set().union(*[cmts[v] for v in reach if v in cmts]) if any(v in cmts for v in reach) else set()
+        for c in choices:
+            if c not in compared and c not in rung:
+                out.append(f"    0  LADDER-GAP  option {c!r} of {var} is never matched by any branch "
+                           f"(dispatch vars {sorted(reach & set(chain))}) - picking it in the UI changes "
+                           f"nothing and the script cannot tell you so")
+        for c in rung:
+            if c not in choices:
+                out.append(f"    0  LADDER-GAP  a branch compares against {c!r}, which is not an option "
+                           f"of {var} - that rung is unreachable (placeholder, typo, or a tier removed "
+                           f"from the list and left behind)")
+    return out
+
+
 def check(lines):
     findings = loop_clamp(lines)
     tc, grids = table_cells(lines)
     fa, sizes = fixed_arrays(lines)
     new = coll_sugar(lines) + forward_refs(lines) + arity(lines) + shadows(lines) + typos(lines)
+    new += tautologies(lines) + template_leaks(lines) + ladder_gaps(lines)
     return findings + tc + fa + new, grids, sizes
 
 
@@ -364,6 +473,15 @@ if barstate.islast
     for j = 0 to array.size(b) - 1
         array.set(b, j, 1.0)
     table.cell(tb, 4, 9, "out of grid")
+    w = not inKz or true
+disp = input.string("a", "D", options=["a", "b", "orphan"])
+string dsel = disp
+if dsel == "a"
+    q = 1
+else if dsel == "b"
+    q = 2
+else if dsel == "%s"
+    q = 3
     if barstate.is_last
         x := 1
 '''
@@ -371,7 +489,11 @@ if barstate.islast
 # SHADOW is 2 because `x = array.get(a, i)` inside the control's loop is itself a local shadow of
 # the global x - a true positive, not a checker defect: inside a block `name = value` DECLARES.
 EXPECT = {"LOOP-CLAMP": 2, "TABLE-CELL": 1, "COLL-SUGAR": 2, "FORWARD-REF": 1,
-          "ARITY": 1, "SHADOW": 2, "TYPO": 1}
+          "ARITY": 1, "SHADOW": 2, "TYPO": 1, "TAUTOLOGY": 1, "TEMPLATE-LEAK": 1, "LADDER-GAP": 2}
+
+
+LITERAL_RULES = {"TAUTOLOGY", "TEMPLATE-LEAK", "LADDER-GAP"}
+CONTROL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests", "ladder-bug.control.pine")
 
 
 def selftest():
@@ -381,6 +503,21 @@ def selftest():
     for line in f:
         print("  control:", line)
     print(f"  selftest: {'PASS' if ok else 'FAIL'} (expected {EXPECT}, got {kinds})")
+    # The synthetic fixture is necessary but not sufficient: a rule tuned until it likes its own
+    # fixture proves nothing. This control is the actual broken line from the actual shipped file -
+    # the 3min rung of the timeframe ladder, left as `== "%s"` by the patch that renamed preset->tier
+    # (audit s16) - so the check is anchored to a defect that really reached a chart.
+    real = 0
+    try:
+        rf, _, _ = check(open(CONTROL_FILE, encoding="utf-8").read().split("\n"))
+        real = len([x for x in rf if x.split()[1] in LITERAL_RULES])
+        for line in rf:
+            print("  real control:", line)
+    except OSError as e:
+        print(f"  real control: MISSING {CONTROL_FILE} - the anchor of this selftest is not optional")
+    if real < 3:
+        print(f"  selftest: FAIL (real-code control must yield >=3 literal-class findings, got {real})")
+        return 1
     return 0 if ok else 1
 
 
@@ -391,6 +528,12 @@ def main():
     bad = 0
     for path in args:
         f, grids, sizes = check(open(path, encoding="utf-8").read().split("\n"))
+        if os.sep + "archive" + os.sep in path:
+            kept = [x for x in f if x.split()[1] not in LITERAL_RULES]
+            if len(kept) != len(f):
+                print(f"{path}: {len(f) - len(kept)} literal-class finding(s) suppressed - archived "
+                      f"baseline, kept byte-identical on purpose")
+            f = kept
         meta = f"tables={grids} fixed={ {k: v for k, v in sizes.items() if v < 30} }"
         print(f"{path}" + (f"   {meta}" if grids else ""))
         for line in f:

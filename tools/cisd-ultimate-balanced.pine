@@ -40,6 +40,7 @@ grp_q = "======= Quality & Risk ======="
 min_score_inp       = input.int(2, "Minimum Score for BEST", minval=1, maxval=5, group=grp_q)
 show_risk_levels    = input.bool(true, "Show Entry / SL / TP", group=grp_q)
 show_liquidity_tgt  = input.bool(true, "Show Auto Liquidity Target", group=grp_q)
+tgtPrior     = input.bool(true, "Target the finished session's extreme, not the one still printing", group=grp_q, tooltip="ON by default, one toggle from off, and it does move the drawn target: the session accumulators include the current bar, so with the live reading a long taken inside the Asian session can be aimed at this bar's own high. Prior-session values are latched when a session ends, so the first session of a chart still falls back to the live one.")
 rr_target           = input.float(2.0, "Risk:Reward Target", minval=1.0, step=0.1, group=grp_q)
 atr_mult_sl_inp     = input.float(0.35, "SL Buffer (ATR)", minval=0.1, step=0.05, group=grp_q)
 cooldown_inp        = input.int(6, "Signal Cooldown (bars)", minval=0, group=grp_q)
@@ -87,6 +88,7 @@ grp_crt = "======= 4H candle range (optional) ======="
 crtOn       = input.bool(false, "Use a reference candle's range as the day's grid", group=grp_crt, tooltip="OFF by default, and nothing in the CISD core consults this layer until you also switch crtGateCore on. Source note: tools/crt-candle-range-study.md. Bounds are the reference candle's wicks; the test is 02-liquidity/liquidity-sweep.md's wick-plus-close-back-inside, which is also 20-turtle-soup/turtle-soup.md's failure condition.")
 crtRef      = input.string("Prev 4H candle", "Reference range", options=["Prev 4H candle", "Prev daily candle", "Intra-anchor (provisional bounds)"], group=grp_crt, tooltip="'Prev 4H candle' is candle 1 of the classic definition (LuxAlgo's library page: mark candle 1's high/low, candle 2 does the raid). 'Intra-anchor' reads the bounds of a candle that is still printing - it is here because a shifting boundary is named as the most common cause of failed candle-range trades, not because the reading is right. 'Prev daily candle' is the daily CRT variant and costs no new data.")
 crtAnchorH  = input.int(1, "Anchor candle opens at this NY hour", minval=0, maxval=23, group=grp_crt, tooltip="1 = the 01:00 NY 4H candle in your screenshots ('4h 1 AM CRT', 'Key Timing 01:30 Liquidity sweep'); the chart clock is pinned to New York by the 17/21/1 labels, see the study section 2. 01:00 is also the April-2017 mentorship London open, which the Killzone set switch already knows.")
+crtCadence  = input.string("Once per day", "Anchor cadence", options=["Once per day", "Every reference candle"], group=grp_crt, tooltip="'Once per day' is the shipped behaviour and what the first build could do: one reference candle per day, the state machine settles once, and after a void the day is over. 'Every reference candle' re-rolls the reference every crtAnchorLen minutes from the anchor, so an hourly anchor really does get its 02:00 / 03:00 / 05:00 / 09:00 / 13:00 checkpoints and 'one setup per anchor candle' means an anchor candle instead of a day. Ignored by the daily reference, which has one candle per day by definition.")
 crtAnchorLen= input.int(240, "Reference candle length (min)", minval=15, maxval=1440, step=15, group=grp_crt, tooltip="240 = the 4H anchor the screenshots use. 60 covers the HOURLY anchors 21-crt/crt-rules.md lists (02:00 / 03:00 / 05:00 / 09:00 / 13:00 NY) - the same machine on a shorter candle, which is what those hours are normally measured on. Ignored by the daily reference, which is 1440 by definition.")
 crtWinOpen  = input.int(0, "Sweep window opens N min after the anchor open", minval=0, maxval=360, group=grp_crt)
 crtWinLen   = input.int(90, "Sweep window length (min)", minval=15, maxval=360, group=grp_crt, tooltip="30 covers their printed 01:30 exactly; 90 covers the 01:00-02:30 first hour and a half. The window does not wrap past midnight.")
@@ -124,6 +126,7 @@ ifvgAge   = input.int(180, "Inverted zone expiry (bars)", minval=20, maxval=900,
 
 ifvgEntry = input.string("CE (50%)", "Entry level in the inverted zone", options=["CE (50%)", "Near edge", "Far edge"], group=grp_if, tooltip="06-fair-value-gaps/ce-as-primary-entry.md makes CE the default depth in the 2025 framing; Near edge is the shallow retest, Far edge the full rebalance.")
 ifvgWin   = input.bool(true, "Take inverted entries only inside the trading window", group=grp_if)
+ifvgClock = input.bool(true, "Apply the after-hours cutoff to inverted entries", group=grp_if, tooltip="ON, and that is a behaviour change worth naming. The shipped gate read (not clockOk or true), which is always true: a term that cannot fail, so the 16:00 NY cutoff that stops BEST signals never applied to inverted-zone entries even though the code was written as if it did. Off restores the old, ungated behaviour.")
 ifvgDraw  = input.bool(true, "Draw entry / stop / target for an inverted entry", group=grp_if)
 ifvgAlert = input.bool(true, "Alert on inverted-zone entries", group=grp_if)
 
@@ -164,7 +167,11 @@ float near_atr_mult = near_mult_inp
 int   max_fvgs_per_side = max_fvgs_inp
 int   max_obs_per_side = max_obs_inp
 
-if tier == "%s"
+// "3min" was `if tier == "%s"` in the file as it arrived - a Python format placeholder that survived
+// the paste - so every 1m/2m/3m chart printed `3min` on the panel while keeping the input values, and
+// 0.55 / len 8 / cooldown 5 / 0.40 / near 2.5 were unreachable. tools/pine-validate.py now has a
+// LADDER-COVER rule and a TEMPLATE-LEAK rule so this class cannot come back quietly.
+if tier == "3min"
     tolerence := 0.55
     len := 8
     min_score_for_best := 2
@@ -249,6 +256,9 @@ int crtObBars   = tfScaled ? f_sc(crtObAge)           : crtObAge
 int fvgFresh    = tfScaled ? f_sc(10)                 : 10
 int obFresh     = tfScaled ? f_sc(12)                 : 12
 int pdWin       = tfScaled ? math.max(8, math.round(25 * tfScale)) : 25
+// The order-block spacer was the last unscaled bar count in the file: six bars meant half an hour on 5m
+// and six hours on 1H, which is why the zones stop appearing at all on coarse charts.
+int obSpacing   = tfScaled ? f_sc(6) : 6
 
 // ═══════════════════════════════════════════════════════════════════
 // KEY LEVELS
@@ -269,6 +279,10 @@ var float lonHigh  = na
 var float lonLow   = na
 var bool  asiaActive = false
 var bool  lonActive  = false
+var float asiaHiPrior = na
+var float asiaLoPrior = na
+var float lonHiPrior  = na
+var float lonLoPrior  = na
 
 if isAsia
     if not asiaActive
@@ -279,6 +293,12 @@ if isAsia
         asiaHigh := math.max(asiaHigh, high)
         asiaLow  := math.min(asiaLow, low)
 else
+    // Latch the finished session before clearing it. get_liq_target used the LIVE accumulator, which
+    // contains the bar being tested - so during Asia the "target" above a long could be this bar's own
+    // high, a line a few ticks away that the trade reaches instantly and the panel then calls a win.
+    if asiaActive
+        asiaHiPrior := asiaHigh
+        asiaLoPrior := asiaLow
     asiaActive := false
 
 if isLondon
@@ -290,6 +310,9 @@ if isLondon
         lonHigh := math.max(lonHigh, high)
         lonLow  := math.min(lonLow, low)
 else
+    if lonActive
+        lonHiPrior := lonHigh
+        lonLoPrior := lonLow
     lonActive := false
 
 // ═══════════════════════════════════════════════════════════════════
@@ -412,8 +435,14 @@ var box[]   live_bull_fvgs   = array.new_box()
 var box[]   live_bear_fvgs   = array.new_box()
 var box[]   live_bull_obs    = array.new_box()
 var box[]   live_bear_obs    = array.new_box()
-var label[] live_fvg_labels  = array.new_label()
-var label[] live_ob_labels   = array.new_label()
+// Per-side label lists, indexed like the boxes they belong to. Sharing one label array between the
+// bull and the bear box list means `array.get(labels, i)` where i came from the bull loop deletes an
+// arbitrary label - usually the bear one - and the two lists drift apart for good, since the cap loops
+// pop from each at different rates.
+var label[] live_bull_fvg_lbls = array.new_label()
+var label[] live_bear_fvg_lbls = array.new_label()
+var label[] live_bull_ob_lbls  = array.new_label()
+var label[] live_bear_ob_lbls  = array.new_label()
 
 var float last_bull_fvg_top    = na
 var float last_bull_fvg_bottom = na
@@ -445,7 +474,7 @@ if bull_fvg and show_live_fvgs and is_near(low, high[2]) and bar_index - last_bu
     box b = box.new(bar_index-2, low, bar_index+12, high[2], bgcolor=color.new(green, fvg_transparency), border_color=color.new(green, 60), border_width=1)
     array.unshift(live_bull_fvgs, b)
     label lb = label.new(bar_index-1, (low+high[2])/2, "FVG", style=label.style_label_left, color=color.new(green, 80), textcolor=color.white, size=size.tiny)
-    array.unshift(live_fvg_labels, lb)
+    array.unshift(live_bull_fvg_lbls, lb)
     last_bull_fvg_top := low
     last_bull_fvg_bottom := high[2]
     last_bull_fvg_bar := bar_index
@@ -455,7 +484,7 @@ if bear_fvg and show_live_fvgs and is_near(low[2], high) and bar_index - last_be
     box b = box.new(bar_index-2, low[2], bar_index+12, high, bgcolor=color.new(red, fvg_transparency), border_color=color.new(red, 60), border_width=1)
     array.unshift(live_bear_fvgs, b)
     label lb = label.new(bar_index-1, (low[2]+high)/2, "FVG", style=label.style_label_left, color=color.new(red, 80), textcolor=color.white, size=size.tiny)
-    array.unshift(live_fvg_labels, lb)
+    array.unshift(live_bear_fvg_lbls, lb)
     last_bear_fvg_top := low[2]
     last_bear_fvg_bottom := high
     last_bear_fvg_bar := bar_index
@@ -490,9 +519,9 @@ if array.size(live_bull_fvgs) > 0
         if low < box.get_bottom(b) or not is_near(box.get_top(b), box.get_bottom(b))
             box.delete(b)
             array.remove(live_bull_fvgs, i)
-            if i < array.size(live_fvg_labels)
-                label.delete(array.get(live_fvg_labels, i))
-                array.remove(live_fvg_labels, i)
+            if i < array.size(live_bull_fvg_lbls)
+                label.delete(array.get(live_bull_fvg_lbls, i))
+                array.remove(live_bull_fvg_lbls, i)
 
 if array.size(live_bear_fvgs) > 0
     for i = array.size(live_bear_fvgs)-1 to 0
@@ -505,18 +534,18 @@ if array.size(live_bear_fvgs) > 0
         if high > box.get_top(b) or not is_near(box.get_top(b), box.get_bottom(b))
             box.delete(b)
             array.remove(live_bear_fvgs, i)
-            if i < array.size(live_fvg_labels)
-                label.delete(array.get(live_fvg_labels, i))
-                array.remove(live_fvg_labels, i)
+            if i < array.size(live_bear_fvg_lbls)
+                label.delete(array.get(live_bear_fvg_lbls, i))
+                array.remove(live_bear_fvg_lbls, i)
 
 while array.size(live_bull_fvgs) > max_fvgs_per_side
     box.delete(array.pop(live_bull_fvgs))
-    if array.size(live_fvg_labels) > 0
-        label.delete(array.pop(live_fvg_labels))
+    if array.size(live_bull_fvg_lbls) > 0
+        label.delete(array.pop(live_bull_fvg_lbls))
 while array.size(live_bear_fvgs) > max_fvgs_per_side
     box.delete(array.pop(live_bear_fvgs))
-    if array.size(live_fvg_labels) > 0
-        label.delete(array.pop(live_fvg_labels))
+    if array.size(live_bear_fvg_lbls) > 0
+        label.delete(array.pop(live_bear_fvg_lbls))
 
 var float last_bull_ob_high = na
 var float last_bull_ob_low  = na
@@ -525,8 +554,8 @@ var float last_bear_ob_high = na
 var float last_bear_ob_low  = na
 var int   last_bear_ob_bar  = na
 
-bool can_create_bull_ob = bar_index - last_bull_ob_created > 6
-bool can_create_bear_ob = bar_index - last_bear_ob_created > 6
+bool can_create_bull_ob = bar_index - last_bull_ob_created > obSpacing
+bool can_create_bear_ob = bar_index - last_bear_ob_created > obSpacing
 
 if close > open and close[1] < open[1] and show_live_obs and can_create_bull_ob and is_near(high[1], low[1])
     if array.size(live_bull_obs) > 0
@@ -537,14 +566,9 @@ if close > open and close[1] < open[1] and show_live_obs and can_create_bull_ob 
                 continue
             box.delete(array.get(live_bull_obs, i))
             array.remove(live_bull_obs, i)
-        if array.size(live_ob_labels) > 0
-            for i = array.size(live_ob_labels)-1 to 0
-                // clamped: a counted for takes its direction from start vs end, so an
-                // empty bound still runs the body once with a bad index — skip it
-                if i < 0 or i >= array.size(live_ob_labels)
-                    continue
-                label.delete(array.get(live_ob_labels, i))
-                array.remove(live_ob_labels, i)
+            if i < array.size(live_bull_ob_lbls)
+                label.delete(array.get(live_bull_ob_lbls, i))
+                array.remove(live_bull_ob_lbls, i)
     last_bull_ob_high := high[1]
     last_bull_ob_low  := low[1]
     last_bull_ob_bar  := bar_index[1]
@@ -552,7 +576,7 @@ if close > open and close[1] < open[1] and show_live_obs and can_create_bull_ob 
     box b = box.new(bar_index[1], high[1], bar_index+12, low[1], bgcolor=color.new(green, ob_transparency), border_color=color.new(green, 50))
     array.unshift(live_bull_obs, b)
     label lb = label.new(bar_index[1]+1, (high[1]+low[1])/2, "OB", style=label.style_label_left, color=color.new(green, 60), textcolor=color.white, size=size.tiny)
-    array.unshift(live_ob_labels, lb)
+    array.unshift(live_bull_ob_lbls, lb)
 
 if close < open and close[1] > open[1] and show_live_obs and can_create_bear_ob and is_near(high[1], low[1])
     if array.size(live_bear_obs) > 0
@@ -563,14 +587,9 @@ if close < open and close[1] > open[1] and show_live_obs and can_create_bear_ob 
                 continue
             box.delete(array.get(live_bear_obs, i))
             array.remove(live_bear_obs, i)
-        if array.size(live_ob_labels) > 0
-            for i = array.size(live_ob_labels)-1 to 0
-                // clamped: a counted for takes its direction from start vs end, so an
-                // empty bound still runs the body once with a bad index — skip it
-                if i < 0 or i >= array.size(live_ob_labels)
-                    continue
-                label.delete(array.get(live_ob_labels, i))
-                array.remove(live_ob_labels, i)
+            if i < array.size(live_bear_ob_lbls)
+                label.delete(array.get(live_bear_ob_lbls, i))
+                array.remove(live_bear_ob_lbls, i)
     last_bear_ob_high := high[1]
     last_bear_ob_low  := low[1]
     last_bear_ob_bar  := bar_index[1]
@@ -578,7 +597,7 @@ if close < open and close[1] > open[1] and show_live_obs and can_create_bear_ob 
     box b = box.new(bar_index[1], high[1], bar_index+12, low[1], bgcolor=color.new(red, ob_transparency), border_color=color.new(red, 50))
     array.unshift(live_bear_obs, b)
     label lb = label.new(bar_index[1]+1, (high[1]+low[1])/2, "OB", style=label.style_label_left, color=color.new(red, 60), textcolor=color.white, size=size.tiny)
-    array.unshift(live_ob_labels, lb)
+    array.unshift(live_bear_ob_lbls, lb)
 
 if array.size(live_bull_obs) > 0
     for i = array.size(live_bull_obs)-1 to 0
@@ -591,9 +610,9 @@ if array.size(live_bull_obs) > 0
         if close < box.get_bottom(b) or not is_near(box.get_top(b), box.get_bottom(b))
             box.delete(b)
             array.remove(live_bull_obs, i)
-            if i < array.size(live_ob_labels)
-                label.delete(array.get(live_ob_labels, i))
-                array.remove(live_ob_labels, i)
+            if i < array.size(live_bull_ob_lbls)
+                label.delete(array.get(live_bull_ob_lbls, i))
+                array.remove(live_bull_ob_lbls, i)
 
 if array.size(live_bear_obs) > 0
     for i = array.size(live_bear_obs)-1 to 0
@@ -606,9 +625,9 @@ if array.size(live_bear_obs) > 0
         if close > box.get_top(b) or not is_near(box.get_top(b), box.get_bottom(b))
             box.delete(b)
             array.remove(live_bear_obs, i)
-            if i < array.size(live_ob_labels)
-                label.delete(array.get(live_ob_labels, i))
-                array.remove(live_ob_labels, i)
+            if i < array.size(live_bear_ob_lbls)
+                label.delete(array.get(live_bear_ob_lbls, i))
+                array.remove(live_bear_ob_lbls, i)
 
 // ═══════════════════════════════════════════════════════════════════
 // PREMIUM / DISCOUNT + HTF + KILLZONE
@@ -661,11 +680,18 @@ var float orHi = na
 var float orLo = na
 var bool  orHiTaken = false
 var bool  orLoTaken = false
+// Edge latches. orTapHi/orTapLo feed alertcondition, and as written they stay true on every bar that
+// keeps touching - so one alert per bar for the whole 09:00-11:00 window, which at 5m is 24 notifications
+// for one event. "Once Per Bar Close" does not save you from that; an edge does.
+var bool  orEvHi = false
+var bool  orEvLo = false
 if useOR and nyMin < 480
     orHi := na
     orLo := na
     orHiTaken := false
     orLoTaken := false
+    orEvHi := false
+    orEvLo := false
 if inOrBuild
     orHi := na(orHi) ? high : math.max(orHi, high)
     orLo := na(orLo) ? low : math.min(orLo, low)
@@ -674,8 +700,12 @@ if orWatch and not orHiTaken and high >= orHi and close < orHi
     orHiTaken := true
 if orWatch and not orLoTaken and low <= orLo and close > orLo
     orLoTaken := true
-bool orTapHi = orWatch and high >= orHi
-bool orTapLo = orWatch and low <= orLo
+bool orTapHi = orWatch and high >= orHi and not orEvHi
+bool orTapLo = orWatch and low <= orLo and not orEvLo
+if orTapHi
+    orEvHi := true
+if orTapLo
+    orEvLo := true
 bool orOkBull = not orGate or orLoTaken
 bool orOkBear = not orGate or orHiTaken
 
@@ -737,7 +767,17 @@ bool crtExpired   = crtDeliverH > 0 and crtSinceA >= crtDeliverH * 60
 // Candle 1. Built by accumulating chart bars inside the reference window instead of by asking for a
 // "240" bar, so it is independent of where your chart's 4H candles happen to start (a 17:00-anchored
 // template and a 00:00-anchored one would otherwise disagree about which candle is which).
-bool  crtRefBuild = not crtOn ? false : crtRef == "Prev 4H candle" ? crtSinceA >= 1440 - crtLenMin : crtRef == "Intra-anchor (provisional bounds)" ? crtSinceA < crtLenMin : false
+// Which reference-candle segment we are inside, counted from the anchor open. Wrapping is what makes
+// this work without a special case: at 00:30 with a 01:00 anchor and a 240-minute candle, crtSinceA is
+// 1410, so the pre-anchor candle is segment 5 and 01:00 is the boundary that promotes it. The old code
+// hard-coded that one boundary as `crtSinceA >= 1440 - crtLenMin`, which is why a second anchor in the
+// same day was impossible.
+int  crtSeg     = crtLenMin > 0 ? int(crtSinceA / crtLenMin) : 0
+var int crtSegPrev = -1
+var bool crtRolled  = false
+bool crtRollNow = crtOn and crtRef != "Prev daily candle" and crtCadence == "Every reference candle" and crtSegPrev >= 0 and crtSeg != crtSegPrev
+var bool crtPendingReset = false
+bool  crtRefBuild = not crtOn ? false : crtRef == "Prev 4H candle" ? crtCadence == "Every reference candle" ? true : crtSinceA >= 1440 - crtLenMin : crtRef == "Intra-anchor (provisional bounds)" ? crtSinceA < crtLenMin : false
 var bool  crtRefActive = false
 var float crtRefHi = na
 var float crtRefLo = na
@@ -749,7 +789,10 @@ var float crtPrevHi = na
 var float crtPrevLo = na
 var float crtRefCl = na
 if crtRefBuild
-    if not crtRefActive
+    if not crtRefActive or crtRollNow
+        if crtRollNow and not na(crtRefHi)
+            crtPendingReset := true
+        crtRolled := true
         crtRefActive := true
         crtRefOp := open
         crtRefHi := high
@@ -762,6 +805,7 @@ if crtRefBuild
         crtRefHi := math.max(crtRefHi, high)
         crtRefLo := math.min(crtRefLo, low)
     crtRefCl := close
+    crtSegPrev := crtSeg
 else
     crtRefActive := false
 
@@ -771,7 +815,7 @@ float crtOp = crtRef == "Prev daily candle" ? pd_open : crtRefOp
 float crtMid = na(crtHi) or na(crtLo) ? na : (crtHi + crtLo) / 2
 float crtRange = na(crtHi) or na(crtLo) ? na : crtHi - crtLo
 bool  crtProv  = crtRef == "Intra-anchor (provisional bounds)"
-bool  crtReady = crtOn and not na(crtHi) and not na(crtLo) and (crtProv or not crtRefActive)
+bool  crtReady = crtOn and not na(crtHi) and not na(crtLo) and (crtProv or crtCadence == "Every reference candle" ? crtRolled : not crtRefActive)
 bool  crtTfOk  = crtRef == "Prev daily candle" or timeframe.in_seconds() <= 14400
 // The disqualifiers, evaluated once per day. They are kept as a single reason string instead of
 // six booleans that are then OR-ed, so the gate and the panel read the same value and cannot
@@ -924,7 +968,7 @@ if ifvgMode != "Off"
         bool wantEntry = ifvgMode != "Track only"
         float lvl = ifvgEntry == "Near edge" ? (role > 0 ? zt : zb) : ifvgEntry == "Far edge" ? (role > 0 ? zb : zt) : (zt + zb) / 2
         bool tap = role > 0 ? low <= lvl and close > lvl and close > open : high >= lvl and close < lvl and close < open
-        if wantEntry and tap and barstate.isconfirmed and (not ifvgWin or inWindow) and (not clockOk or true)
+        if wantEntry and tap and barstate.isconfirmed and (not ifvgWin or inWindow) and (not ifvgClock or clockOk)
             array.set(ivUsed, k, 1)
             if role > 0
                 ifvg_bull := true
@@ -1057,6 +1101,25 @@ if newNyDay
     crtTapHi := false
     crtTapLoPx := na
     crtTapHiPx := na
+
+// A rolled reference starts the machine over: the new candle's bounds are the ones to watch, and
+// 'one setup per anchor candle' has to be cleared by the anchor candle, not by midnight.
+if crtPendingReset
+    crtPendingReset := false
+    crtState := 0
+    crtDir := 0
+    crtUsedToday := false
+    crtSweep := na
+    crtEntryP := na
+    crtSlP := na
+    crtTpP := na
+    crtTp1 := na
+    crtInitRisk := na
+    crtTapLo := false
+    crtTapHi := false
+    crtTapLoPx := na
+    crtTapHiPx := na
+    crtNote := 'new reference candle: state reset for the next segment'
 bool crtBiasBull = crtBias == "None" ? true : crtBias == "HTF bias" ? htf_bull : crtBias == "Above/below prior-day close" ? close > pd_close : htf_bull and close > pd_close
 bool crtBiasBear = crtBias == "None" ? true : crtBias == "HTF bias" ? htf_bear : crtBias == "Above/below prior-day close" ? close < pd_close : htf_bear and close < pd_close
 float crtBuf = crtStop == "Sweep extreme + ATR buffer" ? atr * atr_mult_sl : 0.0
@@ -1434,15 +1497,19 @@ liqLo18 = ta.lowest(low, 18)
 get_liq_target(bool is_bull) =>
     float target = na
     string name = ""
+    float aHi = tgtPrior ? nz(asiaHiPrior, asiaHigh) : asiaHigh
+    float aLo = tgtPrior ? nz(asiaLoPrior, asiaLow)  : asiaLow
+    float lHi = tgtPrior ? nz(lonHiPrior, lonHigh)   : lonHigh
+    float lLo = tgtPrior ? nz(lonLoPrior, lonLow)    : lonLow
     if is_bull
         if not na(pd_high) and pd_high > close
             target := pd_high
             name := "PDH"
-        else if not na(asiaHigh) and asiaHigh > close
-            target := asiaHigh
+        else if not na(aHi) and aHi > close
+            target := aHi
             name := "Asia H"
-        else if not na(lonHigh) and lonHigh > close
-            target := lonHigh
+        else if not na(lHi) and lHi > close
+            target := lHi
             name := "Lon H"
         else
             target := liqHi18
@@ -1451,11 +1518,11 @@ get_liq_target(bool is_bull) =>
         if not na(pd_low) and pd_low < close
             target := pd_low
             name := "PDL"
-        else if not na(asiaLow) and asiaLow < close
-            target := asiaLow
+        else if not na(aLo) and aLo < close
+            target := aLo
             name := "Asia L"
-        else if not na(lonLow) and lonLow < close
-            target := lonLow
+        else if not na(lLo) and lLo < close
+            target := lLo
             name := "Lon L"
         else
             target := liqLo18
@@ -1473,8 +1540,12 @@ if cisd == 1 and can_signal
     bool pd_ok   = in_premium
     bool body_ok = body_pct >= body_pct_min
 
-    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0) + (scCrt ? 1 : 0)
-    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBull ? 1 : 0) + (scCrt and crtOkBear ? 1 : 0)
+    // One point, for the ALIGNED direction only. This read `+ (scCrt and crtOkBull) + (scCrt and
+    // crtOkBear)` on the bear side, so a bearish signal was rewarded for an armed bullish reference
+    // range - the one condition every source in the corpus calls the largest win-rate killer - and the
+    // bull side had no reference term at all while still being graded against the same 4-point base.
+    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0)
+    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBear ? 1 : 0)
     float sFrac = sMax > 0 ? 1.0 * score / sMax : 0.0
     grade := sFrac >= 0.999 ? "A+" : sFrac >= 0.80 ? "A" : sFrac >= 0.60 ? "B" : "C"
 
@@ -1529,8 +1600,8 @@ if cisd == 2 and can_signal
     bool pd_ok   = in_discount
     bool body_ok = body_pct >= body_pct_min
 
-    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0)
-    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0)
+    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0)
+    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBull ? 1 : 0)
     float sFrac = sMax > 0 ? 1.0 * score / sMax : 0.0
     grade := sFrac >= 0.999 ? "A+" : sFrac >= 0.80 ? "A" : sFrac >= 0.60 ? "B" : "C"
 

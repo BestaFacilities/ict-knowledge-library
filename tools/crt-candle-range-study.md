@@ -332,3 +332,12 @@ delivery expiry mean the same thing on any chart and were left alone. The one ba
 `Live-OB freshness` therefore keeps its *duration* rather than its bar count. What the rescaling cannot fix
 is having nowhere to act: on a 4H chart a 90-minute window sits inside one candle, so the model stays an
 execution-timeframe story - run the chart at 5m or 15m and let `crtAnchorLen` give you the 4H range.
+
+**Correction (2026-10-12, audit §16).** The sentence above this one claimed `crtAnchorLen` makes the hourly
+anchors available - "60 covers the hourly anchors 02:00 / 03:00 / 05:00 / 09:00 / 13:00, the same machine on
+a shorter candle". It half-true'd: 60 minutes does give a shorter reference candle, but the state machine ran
+one anchor per day and `crtUsedToday` latched for the whole day, so 60 bought exactly one hourly range and
+then silence until midnight. `Anchor cadence` = `Every reference candle` is what the sentence assumed already
+existed, and the default (`Once per day`) is the behaviour that was actually there. Worth keeping the wrong
+version in the record: the input existed, the tooltip described the feature it was *meant* to enable, and
+nothing tested the difference.

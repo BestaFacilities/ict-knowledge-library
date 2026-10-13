@@ -980,3 +980,63 @@ because the helper appended instead of inserting - four errors from a text subst
 cleanly". Substring surgery on Pine needs the same discipline as the Pine itself: match a whole call, not a
 line ending.
 
+## 16. The refinement read (2026-10-12): eight defects, one of them mine, and the class they all belong to
+
+Asked whether anything in the file still needed work, the answer was to read it end to end rather than to
+invent features. Eight defects, in the order that matters:
+
+| # | defect | who put it there | how it ships now |
+|---|---|---|---|
+| 1 | `if tier == "%s"` - the ladder's `3min` rung could never match, so 1m/2m/3m charts selected a tier, printed it on the panel and applied the input values instead of 0.55 / len 8 / cooldown 5 / 0.40 / 2.5 | **me**, in the auto-timeframe round (§15): the rename `preset -> tier` was built with Python `%`-interpolation and one placeholder survived into the file | fixed, and it is a real behaviour change on 1m-3m charts, not behind a switch, because the switch (`preset = Auto`) was already nominally on |
+| 2 | `... and (not clockOk or true)` in the iFVG entry gate - a term that cannot fail, so the after-hours cutoff never applied to inverted entries while the code read as if it did | pre-existing | `Apply the after-hours cutoff to inverted entries`, default **on**, one toggle from off |
+| 3 | the bear side scored `(scCrt and crtOkBull) + (scCrt and crtOkBear)` and its `sMax` carried both, while the bull side had no reference term and a smaller `sMax` - a bearish signal was paid a point for an armed **bullish** range, the one thing every source calls the largest win-rate killer | pre-existing | one aligned term per side, identical `sMax` on both |
+| 4 | one shared label array per pair of directions, indexed by the *other* list's counter: `label.delete(array.get(live_ob_labels, i))` where `i` came from the bull box loop, so deleting a bull order block could delete a bear label, and the two lists drifted apart permanently since the cap loops pop at different rates | pre-existing | four per-side lists, each touched at its own index |
+| 5 | `orTapHi` / `orTapLo` fed `alertcondition` while staying true on every bar that kept touching, so one sweep at 5m produced up to 24 notifications across the 09:00-11:00 window; "Once Per Bar Close" does not help, an edge does | pre-existing | fired-latches, reset with the range |
+| 6 | the order-block spacer `> 6` was the last unscaled bar count in the file: half an hour at 5m, six hours at 1H, which is how zones stop appearing at all on coarse charts | pre-existing | `f_sc(6)`, i.e. in the §15 scaling machinery |
+| 7 | `get_liq_target` read the **live** session accumulators, which include the bar being tested: a long taken inside the Asian session could be aimed at this bar's own high, a line a few ticks away that the trade reaches at once and the panel then counts as a result | pre-existing | prior-session latches taken when a session ends, `Target the finished session's extreme`, default **on** |
+| 8 | `crtAnchorLen`'s tooltip said 60 covers the hourly anchors (02:00 / 03:00 / 05:00 / 09:00 / 13:00). The state machine had one anchor per day and a day-long `crtUsedToday` latch, so 60 gave exactly one hourly candle's range, once | **me**, in the §15 tooltip, and the claim was in the study too | `Anchor cadence`: `Once per day` (default, unchanged) or `Every reference candle`, which re-rolls the reference and the state per segment. Tooltip and `tools/crt-candle-range-study.md` §11 corrected rather than defended |
+
+**One class, two ends.** Defect 1 was created by a patch script that built Pine text with `%`
+interpolation, and defects 6 and 8 were created by a value that was right in one unit and never converted to
+another. So the durable fixes are on both ends: the patch scripts in this session now substitute literal
+tokens and assert every anchor before a single write (two `%`-argument miscounts during this round died
+exactly there, before touching the file), and `tools/pine-validate.py` grew **TEMPLATE-LEAK** so a leftover
+placeholder in shipped code is a build failure rather than a story.
+
+**Three rules, and the controls that keep them honest.** `pine-validate.py` goes from eight rules to eleven:
+TAUTOLOGY (`or true` / `and false`, matched on code with strings blanked, because prose about being "always
+true" is not a defect), TEMPLATE-LEAK (`%s`, `%d`, `.format(`, single-brace `{...}` - explicitly **not**
+`{{ticker}}`, which is TradingView's own alert placeholder syntax and was my first false positive on it), and
+LADDER-GAP, which judges an `if/else if` string ladder against the input's `options` in both directions: an
+option no branch ever matches, and a rung no option can select. The `>= 3 rungs` floor in LADDER-GAP exists
+because the first version accused `crtTgt`'s "Opposite bound" and `crtFri`'s "Off", which are the
+`else`-residual options of a one-comparison test, not a dispatch table; a rule whose findings have to be
+explained away is a rule nobody runs. Archive files have the three literal-class rules suppressed by policy
+- `tools/archive/` is the frozen baseline the reversibility argument in §13 depends on, so the point of
+keeping it is that nobody fixes it.
+
+The selftest now refuses to pass on fixture evidence alone: `tools/tests/ladder-bug.control.pine` is the
+actual broken rung transcribed out of the shipped file, and `--selftest` fails unless the rules still catch
+it (5 findings today: 1 TAUTOLOGY, 1 TEMPLATE-LEAK, 2 unreached options, 1 dead rung). Run against the
+pre-fix file it reports the same two defect classes before any of my prose was written - which is the only
+kind of checker worth keeping in a repo that has already been fooled twice by a green run over dead code.
+
+**What was verified, and the limit of it.** All four harness exercises return identical counters to the
+pre-refine run (`crtWhy=3`; `crtEnt=1 crtState=5 crtNetR=-1`; `crtState=2 crtWhy=10`; Custom `igaps=8
+izones=1`), so the six restructurings that were supposed to be behaviour-neutral are behaviour-neutral on
+every path the reference runtime can walk, and `crtCadence`'s default leaves the state machine alone. Two
+things it cannot certify, said plainly: defects 2, 3 and 7 move numbers on a real chart at exactly the hours
+the synthetic run never reaches (`ifvgClock` gates on `stopHour`, `tgtPrior` on session boundaries), and
+defect 1 changes 1m-3m behaviour that the reference runtime cannot distinguish from 5m at all, since it runs
+1-day bars. The comparison is also now across a tooling change - the venv was rebuilt this turn and `pyne`
+is 0.6.9 where §14-§15 measured with 0.6.8, so the 715 ms default figure is not a valid control against any
+earlier number in this file, and no timing claim is made.
+
+**What I did not touch, with the reason.** `isAsia`/`isLondon` still measure in hours while everything else
+measures in minutes, because those two feed the *target* preference list, whose resolution is already bounded
+by the prior-session latch added above; `pipSz`'s "10 ticks = 1 pip" heuristic stays as documented in
+`tools/settings-by-pair.md` §3 rather than becoming a guess about every broker; `hide_expired_levels` and
+`spentMax` stay separate because they answer different questions (a level past expiry vs a level the day has
+used); and `analysis`/`Score` on the panel still reflect the current bar only, which is a display choice with
+no signal attached and the kind of thing to change when someone asks, not on a general read.
+
