@@ -42,6 +42,9 @@ defaults to "wrong" is a trap; everything that adds *behaviour* is opt-in:
 | spent levels kept visible but bounded (was: leaked forever) | `Keep up to N spent levels visible` | 24 |
 | per-side zone cooldown (was: one shared 3-bar counter) | `Bars between new zones (per side)` | 1 |
 | painted-candle overlay | `Overlay painted candles in the trend colour` | on |
+| session extremes and the prior day's bounds as raidable levels | `Track each session's high and low as a level` | off - §8 |
+| which sessions are pooled, and whether PDH/PDL join them | five per-session booleans + `Add the prior day's high and low` | Asia / London / NY AM on, London close / NY PM off, PDH/PDL on |
+| how a level dies, and how long it waits | `A level is taken when` / `Projection` | `Close through` / `Until taken` |
 
 Fixed with no switch, because they were simply wrong: the pivot detector now runs on `high`/`low`
 instead of the default `hlc3` while the level drawn was `high[len]`/`low[len]`; the entry marks are
@@ -242,7 +245,7 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    nothing happened".
 3. **Paste and add.** Chart → bottom panel → Pine Editor → New Script → replace everything → Save As
    `CISD Ultimate Balanced` → Add to chart.
-4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-12-refine`**.
+4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-killzone`**.
    The tag is bumped whenever the file changes, so this step is a fact and not a guess; if the legend shows the old string you are looking at
    the old compile, and nothing you conclude from that chart is about this file.
 5. **Choose the chart.** `EURUSD` or `GBPUSD`, 5m or 15m, is what everything here is tuned and verified for.
@@ -270,15 +273,16 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    | `Acceptance` / `Direction filter` | `Close back inside` / `HTF bias` | shipped defaults, and the two things the sources say not to negotiate |
    | `Apply the 2017 stand-aside list` | on | shipped default; the panel says why it stood aside |
    | `HTF for Bias` | `60` on 5m/15m | the one input the script will not derive: see its tooltip |
+| `Track each session's high and low as a level` (`kzlOn`) | on, if you watch the session levels | off by default - a second model again, and a draw-and-count one (§8). It cannot change a CISD signal |
 8. **Alerts come in two kinds, and the difference bites.** Under the indicator's ⚙ / Create Alert:
-   * the ten **conditions** (`BEST Bearish CISD`, `BEST Bullish CISD`, `iFVG Inversion Long`/`Short`,
+   * the twelve **conditions** (`BEST Bearish CISD`, `BEST Bullish CISD`, `iFVG Inversion Long`/`Short`,
      `NY opening range high swept`/`low swept`, `CRT bound raided and accepted back`, `CRT entry`,
-     `CRT outcome (target or stop)`, `CRT void / abandoned`) - pick the named condition, **Once Per bar Close**;
-   * the four **messages** built at runtime (`iFVG ...`, `CRT long ...`, `BEST BEARISH ...`, `BEST BULLISH ...`)
+     `CRT outcome (target or stop)`, `CRT void / abandoned`, `KZL level raided and rejected`, `KZL level taken`) - pick the named condition, **Once Per bar Close**;
+   * the five **messages** built at runtime (`iFVG ...`, `CRT long ...`, `KZL ASIA high ...`, `BEST BEARISH ...`, `BEST BULLISH ...`)
      carry the entry, SL, TP, pips and the tier in the text. Those need Condition =
      **Any alert() function call**, which is the one to pick if you want the numbers in the notification.
-   The opening-range pair only exists with `useOR` on and the four CRT ones only with `crtOn` on: their
-   conditions are `useOR and ...` / `crtOn and ...` in the code, so a silent alert is usually a switch, not a bug.
+   The opening-range pair only exists with `useOR` on, the four CRT ones with `crtOn` and the two KZL ones with `kzlOn`: their
+   conditions are `useOR and ...` / `crtOn and ...` / `kzlOn and ...` in the code, so a silent alert is usually a switch, not a bug.
 9. **Change the timeframe and check one thing.** Row 1 should change by itself and the signals should keep
    their meaning. If `15m / 15 x1` ever appears, the scaling did not engage - that is a bug, not tuning.
 10. **Next session:** watch 01:00-02:30 NY once with `crtDraw` on and confirm the reference box, the raid
@@ -287,6 +291,88 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
     verification step left that requires your eyes.
 11. **If drawings go missing** on a lower TradingView plan: the script asks for 500 lines / 500 labels /
     80 boxes. Lower `Max FVGs per side`, `Max OBs per side`, `Live inverted zones per side` and
-    `Keep up to N spent levels visible` (24) - the objects, not the logic. Nothing in the signal path depends
+    `Keep up to N spent levels visible` (24) - the objects, not the logic. The killzone level layer does not need asking: `Live levels kept` caps
+    it at 12 lines and 12 labels whatever your timeframe, which is exactly why its levels are projected with
+    `extend.right` rather than re-stamped at the right edge. Nothing in the signal path depends
     on how many are drawn, except the zones-near-price filter.
+
+## 8. The killzone level layer (`grp_kzl`) — added 2026-10-13, off by default
+
+The picture that started it was a 15m NQ chart where yesterday's Asian high was still a horizontal line this
+morning. That is not decoration: an un-raided session extreme is resting orders nobody has filled yet, and
+the sentence every source uses for a tradeable day - "Daily Bias → DOL → Key Levels → 4H CRT → LTF
+confirmation" - has *key levels* in it as a step, not as a vibe. The inventory, the object budget and the
+extend-vs-new verdict are `tools/mx-setups-study.md` §8. What shipped is P1, the **draw-and-count** half.
+
+**No score, no gate and no entry consults these levels.** Lines, states, two panel rows, two alerts, one
+message. Feeding them into the CISD score is P2 and it is a decision this build does not make, because it
+would move signals on charts that only wanted the drawing.
+
+### What it draws
+
+* when a pooled session **ends**, its high and its low are pushed onto a level registry - Asia, London,
+  NY AM, London close, NY PM, plus `PDH`/`PDL` if `Add the prior day's high and low` is on. A session has
+  to have spanned `A session must span at least this many bars` or nothing is created, which is also what
+  stops a thin index CFD feed that never prints London from inventing a London range.
+* each level is an `extend.right` line with one small label at the session edge (`ASIA High`, `NYAM Low`).
+  The label is placed once and never moved, and a live level costs **zero** object calls per bar - which is
+  the only reason a 500-line budget can carry days of levels at once.
+* three states, because the distinction is the whole information: **live** (solid), **raided and held**
+  (dashed and thicker: price took out the level and closed back inside, the sweep the model wants),
+  **taken** (dotted and grey, the line cut off at the bar that closed through it, no longer projected).
+* while a session is still forming its window is shaded with `bgcolor`. Painted spans, not boxes, on
+  purpose: `max_boxes_count` is 80 and is shared with the FVG and order-block registries, where box
+  starvation has already been an audited failure of this file.
+
+### The switches
+
+| label | default | what it decides |
+|---|---|---|
+| `Track each session's high and low as a level` | **off** | the layer. Off, the panel reads `layer off` on both rows and nothing else here runs |
+| `Asia levels (20:00-00:00 NY)`, `London levels`, `New York AM levels` | on | the three sessions whose extremes carry information in the playbook this file is tuned for |
+| `London close levels`, `New York PM levels` | off | two-hour windows; 3 bars on a 30m chart, 7-8 on 15m |
+| `Add the prior day's high and low` | on | free: `pd_high`/`pd_low` already come back on the daily `request.security` tuple the 2017 stand-aside list uses. On CME feeds "prior day" is the **Globex** day, not midnight to midnight - the tooltip says so, because a line that lands on the wrong session is otherwise read as a bug |
+| `Projection` | `Until taken` | `Today only` and `3 days` retire by session count instead; `Until taken` is the reference behaviour, an unmitigated high is still a draw two days later |
+| `A level is taken when` | `Close through` | the same sweep arithmetic used everywhere else in this file (a sweep wicks, BOS closes). `Wick through` retires a level the first time it is poked, which is the other school |
+| `A session must span at least this many bars` | 6 | scaled by the auto tier like every other bar count - what that means for your timeframe is the last column of `tools/settings-by-pair.md` §2 |
+| `Live levels kept` | 12 | five sessions × two bounds × a day and a half is ten; past the cap the oldest are dropped, so the count is bounded on any timeframe |
+| `Name each level at its session edge` | on | off removes the labels, not the levels |
+| `Shade the session that is forming` | on | the `bgcolor` |
+
+### Panel and alerts
+
+`KZL levels` reads `N live / M made / R raided / T taken` for the life of the chart, and `KZL last` names
+the most recent event (`LNDN high 1.1742 raided, closed back inside`). The conditions are `KZL level raided
+and rejected` and `KZL level taken`; the runtime message is one `alert()` in the shape of
+`KZL ASIA low 20815.0 closed through | 9 live | NQ 15 | 15min`, which is what the "Any alert() function
+call" recipe in §7 picks up. Raid and take are counted separately on purpose: a day that is all takes is a
+day where the levels are run through, and a day that is all raids is a day where every poke at liquidity
+fails - those are not the same trading day, and they are not the same next trade.
+
+### Three things this deliberately is not
+
+1. **Not the five `kz_*` gate switches.** The plan was to reuse them. Reading the two against each other
+   changed that: `kz_asia` off means "do not signal in Asia", not "the Asian range is irrelevant", which is
+   precisely what someone trading London needs the Asian high for. An information layer should not be
+   hostage to a gate switch.
+2. **Not the same "Asia" as the targets.** The pooled window is 20:00-00:00 NY - the same block `wAsiaKz`
+   gates on and the same window the 2017 list measures - while the *target* preference list uses this file's
+   18:00-02:00 Asian accumulator. Both exist, both are labelled; silently unifying them would be a change
+   nobody asked for.
+3. **Not a setup model.** There is no "Asian high raided + short bias ⇒ entry" here. That is P2, and it
+   earns its place by measurement, not because the lines are now drawn.
+
+### Cost, and what has not been verified
+
+158 lines, 13 inputs, 13 `var` arrays and 4 scalars, 6 functions, **no new `request.security` call, no new
+plot, no new box**, and zero object calls per bar for a level that nobody has touched. The reference
+runtime runs it green twice over: with the shipped defaults on synthetic daily bars (every counter zero,
+which is the *correct* answer when the clock never enters a session) and as the gate's sixth exercise, where
+1198 levels are made, 599 are taken, 599 are raided and held, and the registry sits at exactly the 12-level
+cap. Creation, projection, both transitions, day-staleness and the cap are therefore executed code, not
+compiled text. What is not: that 02:00-05:00 is the right London for your symbol and feed, that a real sweep
+looks like the synthetic one (the exercise relaxes `sweepStrict` to make the raid branch reachable - audit
+§17 has the arithmetic), and none of this is a claim about profit. The lines have been drawn by nobody but
+pyne's interpreter: the paste, and one look at a real session, is still the test.
+
 

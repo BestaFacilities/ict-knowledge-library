@@ -1,5 +1,5 @@
 //@version=6
-indicator("CISD Ultimate Balanced · build 2026-10-12-refine", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
+indicator("CISD Ultimate Balanced · build 2026-10-13-killzone", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
 
 // ═══════════════════════════════════════════════════════════════════
 // PRESET SYSTEM
@@ -708,6 +708,162 @@ if orTapLo
     orEvLo := true
 bool orOkBull = not orGate or orLoTaken
 bool orOkBear = not orGate or orHiTaken
+
+// ═══════════════════════════════════════════════════════════════════
+// KILLZONE LEVELS - the session extremes, projected until someone takes them
+// ═══════════════════════════════════════════════════════════════════
+// The CISD core answers "was a recent pivot swept"; this answers "was the ASIAN HIGH swept", which is
+// the sentence the sources actually use ("Daily Bias -> DOL -> Key Levels -> 4H CRT -> LTF
+// confirmation", and gate 2 of Sham's three is 'key level and candle range? No = stop'). Inventory and
+// the object-budget argument for the shape of this layer: tools/mx-setups-study.md section 8.
+grp_kzl = "======= Killzone levels (optional) ======="
+kzlOn         = input.bool(false, "Track each session's high and low as a level", group=grp_kzl, tooltip="OFF by default, like every added layer. This is the draw-and-count half: it puts the session bounds on the chart as lines that survive their session, marks them raided or taken, and tells you which. Nothing in the CISD score or gate consults it until a later build lets it.")
+kzl_s_asia    = input.bool(true, "Asia levels (20:00-00:00 NY)", group=grp_kzl)
+kzl_s_london  = input.bool(true, "London levels", group=grp_kzl)
+kzl_s_nyam    = input.bool(true, "New York AM levels", group=grp_kzl)
+kzl_s_loncls  = input.bool(false, "London close levels", group=grp_kzl)
+kzl_s_nypm    = input.bool(false, "New York PM levels", group=grp_kzl)
+kzlPdhPd      = input.bool(true, "Add the prior day's high and low", group=grp_kzl, tooltip="Free: pd_high / pd_low already come back on the daily request.security tuple the 2017 stand-aside list uses, so this draws existing data rather than asking for more. CAVEAT on CME futures: TV's daily bar is the Globex day (18:00-17:00 ET), so 'prior day' is that, not midnight to midnight. If these two lines land on the wrong session on an index feed, that is why, and it is the feed's day - not this script's.")
+kzlProject    = input.string("Until taken", "Projection", options=["Until taken", "Today only", "3 days"], group=grp_kzl, tooltip="'Until taken' is the behaviour in the reference screenshots: an unmitigated session high is still a draw on liquidity two days later. 'Today only' is the reading for people who treat a level as spent once the session that made it is over.")
+kzlMitigate   = input.string("Close through", "A level is taken when", options=["Wick through", "Close through"], group=grp_kzl, tooltip="'Close through' matches the sweep definition this file already uses everywhere else (02-liquidity/liquidity-sweep.md: a sweep wicks, BOS closes) and needs no extra switch to stay consistent. 'Wick through' retires a level the first time price pokes past it, which is the other school and also what 'Touch only' does to the candle-range layer.")
+kzlMinBars    = input.int(6, "A session must span at least this many bars", minval=1, group=grp_kzl, tooltip="Read as a 5-minute reference and rescaled like every other bar count (audit section 15), because a 2-bar 'session' on a 1H chart is not a range, it is a print. Also the guard against an empty window on an index CFD feed, where the London session may simply not exist in the data.")
+kzlMaxLive    = input.int(12, "Live levels kept", minval=2, maxval=40, group=grp_kzl, tooltip="Five sessions, two bounds, a day and a half is ten. Past this the oldest are dropped, so the count is bounded whatever the timeframe.")
+kzlDrawLabels = input.bool(true, "Name each level at its session edge", group=grp_kzl, tooltip="One label per level, fixed where the session ended, and never moved again - not a price tag re-stamped at the right edge every bar, which is the other way to do it and costs a label update per level per bar for the rest of the chart.")
+kzlShade      = input.bool(true, "Shade the session that is forming", group=grp_kzl, tooltip="bgcolor, on purpose: the session spans would otherwise be boxes, and max_boxes_count is 80 shared with the FVG and order-block registries, where box starvation has already been an audited failure in this file.")
+// Per-session switches rather than reusing the five kz_* killzone flags, which was the plan in
+// tools/mx-setups-study.md section 8. Reading the two against each other changed my mind: kz_asia off
+// means 'do not signal in Asia', not 'the Asian range is irrelevant', and the second is exactly what a
+// London trader needs. Tying them together would have made an information layer hostage to a gate.
+var array<int>   kzA    = array.from(1200, lonA, nyA, 600, 810)
+var array<int>   kzB     = array.from(1440, 300, nyB, 720, 960)
+var array<bool>  kzAct  = array.new_bool(5, false)
+var array<float> kzHi   = array.new_float(5, na)
+var array<float> kzLo   = array.new_float(5, na)
+var array<int>   kzN    = array.new_int(5, 0)
+var array<float> kzY    = array.new_float()
+var array<int>   kzSid = array.new_int()
+var array<int>   kzDir = array.new_int()
+var array<int>   kzBorn = array.new_int()
+var array<int>   kzSt  = array.new_int()
+var array<line>  kzLn  = array.new_line()
+var array<label> kzLb  = array.new_label()
+var int   kzDayN  = 0
+var int   kzlSeen = 0
+var int   kzlRaid = 0
+var int   kzlTake = 0
+var string kzlLast = ''
+bool kzNewDay = nz(nyMin[1]) > nyMin
+if kzNewDay
+    kzDayN += 1
+int kzlMinBarsS = tfScaled ? f_sc(kzlMinBars) : kzlMinBars
+
+f_kzWinAB(int a, int b) =>
+    b >= a ? nyMin >= a and nyMin < b : nyMin >= a or nyMin < b
+f_kzSel(int s) =>
+    s == 0 ? kzl_s_asia : s == 1 ? kzl_s_london : s == 2 ? kzl_s_nyam : s == 3 ? kzl_s_loncls : kzl_s_nypm
+f_kzNam(int s) =>
+    s == 5 ? "PD" : s == 0 ? "ASIA" : s == 1 ? "LNDN" : s == 2 ? "NYAM" : s == 3 ? "LNCL" : "NYPN"
+f_kzCol(int s) =>
+    s == 5 ? color.new(color.gray, 35) : s == 0 ? color.new(color.blue, 35) : s == 1 ? color.new(color.red, 35) : s == 2 ? color.new(color.teal, 35) : s == 3 ? color.new(color.orange, 35) : color.new(color.purple, 35)
+f_kzDrop(int i) =>
+    line xl = array.get(kzLn, i)
+    label yl = array.get(kzLb, i)
+    if not na(xl)
+        line.delete(xl)
+    if not na(yl)
+        label.delete(yl)
+    array.remove(kzY, i)
+    array.remove(kzSid, i)
+    array.remove(kzDir, i)
+    array.remove(kzBorn, i)
+    array.remove(kzSt, i)
+    array.remove(kzLn, i)
+    array.remove(kzLb, i)
+// A function may not assign a global in v6 - the compiler answers 'Cannot modify global
+// variable' - so the counter belongs to the call sites, which guard the same way this does.
+f_kzPush(float y, int sid, int dir) =>
+    if kzlOn and not na(y)
+        line l = line.new(bar_index, y, bar_index + 1, y, color=f_kzCol(sid), width=1, extend=extend.right)
+        label lb = kzlDrawLabels ? label.new(bar_index + 1, y, f_kzNam(sid) + (dir > 0 ? " High" : " Low"), style=label.style_label_left, color=color.new(color.black, 100), textcolor=f_kzCol(sid), size=size.tiny) : na
+        array.unshift(kzY, y)
+        array.unshift(kzSid, sid)
+        array.unshift(kzDir, dir)
+        array.unshift(kzBorn, kzDayN)
+        array.unshift(kzSt, 0)
+        array.unshift(kzLn, l)
+        array.unshift(kzLb, lb)
+
+if kzlOn
+    for sh = 0 to 4
+        bool on = f_kzSel(sh) and f_kzWinAB(array.get(kzA, sh), array.get(kzB, sh))
+        if on
+            if not array.get(kzAct, sh)
+                array.set(kzAct, sh, true)
+                array.set(kzHi, sh, high)
+                array.set(kzLo, sh, low)
+                array.set(kzN, sh, 1)
+            else
+                array.set(kzHi, sh, math.max(array.get(kzHi, sh), high))
+                array.set(kzLo, sh, math.min(array.get(kzLo, sh), low))
+                array.set(kzN, sh, array.get(kzN, sh) + 1)
+        else if array.get(kzAct, sh)
+            array.set(kzAct, sh, false)
+            if array.get(kzN, sh) >= kzlMinBarsS and not na(array.get(kzHi, sh)) and not na(array.get(kzLo, sh))
+                f_kzPush(array.get(kzHi, sh), sh, 1)
+                f_kzPush(array.get(kzLo, sh), sh, -1)
+                kzlSeen += 2
+if kzlOn and kzlPdhPd and (kzNewDay or barstate.isfirst) and not na(pd_high) and not na(pd_low)
+    f_kzPush(pd_high, 5, 1)
+    f_kzPush(pd_low, 5, -1)
+    kzlSeen += 2
+bool kzlEvRaid = false
+bool kzlEvTake = false
+if kzlOn and array.size(kzY) > 0
+    for i = array.size(kzY) - 1 to 0
+        // clamped: a counted for takes its direction from start vs end, so an empty bound still runs
+        // the body once with a bad index - the LOOP-CLAMP rule in tools/pine-validate.py is here for this
+        if i < 0 or i >= array.size(kzY)
+            continue
+        float y = array.get(kzY, i)
+        int sid = array.get(kzSid, i)
+        int dir = array.get(kzDir, i)
+        int st = array.get(kzSt, i)
+        int born = array.get(kzBorn, i)
+        bool stale = kzlProject == "Today only" ? kzDayN - born > 0 : kzlProject == "3 days" ? kzDayN - born > 2 : false
+        if stale
+            f_kzDrop(i)
+        else if st != 2
+            bool touched = dir > 0 ? high >= y : low <= y
+            bool through = dir > 0 ? close > y : close < y
+            line l = array.get(kzLn, i)
+            if touched and (kzlMitigate == "Wick through" or through)
+                array.set(kzSt, i, 2)
+                if not na(l)
+                    line.set_extend(l, extend.none)
+                    line.set_x2(l, bar_index)
+                    line.set_color(l, color.new(color.gray, 55))
+                    line.set_style(l, line.style_dotted)
+                kzlTake += 1
+                kzlEvTake := true
+                kzlLast := f_kzNam(sid) + ' ' + (dir > 0 ? 'high' : 'low') + ' ' + str.tostring(y, format.mintick) + ' closed through'
+            else if st == 0 and (dir > 0 ? f_sweepHi(y) : f_sweepLo(y))
+                array.set(kzSt, i, 1)
+                if not na(l)
+                    line.set_style(l, line.style_dashed)
+                    line.set_width(l, 2)
+                kzlRaid += 1
+                kzlEvRaid := true
+                kzlLast := f_kzNam(sid) + ' ' + (dir > 0 ? 'high' : 'low') + ' ' + str.tostring(y, format.mintick) + ' raided, closed back inside'
+while array.size(kzY) > kzlMaxLive
+    f_kzDrop(array.size(kzY) - 1)
+color kzlShadeCol = na
+if kzlOn and kzlShade
+    for sw = 0 to 4
+        if array.get(kzAct, sw)
+            kzlShadeCol := f_kzCol(sw)
+bgcolor(kzlShadeCol)
+if kzlOn and (kzlEvRaid or kzlEvTake)
+    alert('KZL ' + kzlLast + ' | ' + str.tostring(array.size(kzY)) + ' live | ' + syminfo.ticker + ' ' + timeframe.period + ' | ' + tier, alert.freq_once_per_bar)
 
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1738,7 +1894,7 @@ if analysis == ""
     analysis := "Clear"
 
 if show_dashboard and barstate.islast
-    var table dash = table.new(position.top_right, 2, 16, bgcolor=color.new(#0d0d0d, 15), border_width=1)
+    var table dash = table.new(position.top_right, 2, 18, bgcolor=color.new(#0d0d0d, 15), border_width=1)
     table.cell(dash, 0, 0, "CISD Ultimate", text_color=color.white, text_size=size.small)
     table.cell(dash, 1, 0, tier + ' / ' + timeframe.period + (tfScaled ? ' x' + str.tostring(tfScale, '#.####') : preset == "Custom" ? ' windows as written' : ' no bar duration here'), text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
@@ -1770,6 +1926,10 @@ if show_dashboard and barstate.islast
     table.cell(dash, 0, 14, "CRT why", text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 1, 14, (crtNote == "" ? "no change this bar" : crtNote) + (crtPerf == "" ? "" : "\n" + crtPerf) + (crtFri == "Mark only" and isNfpFri ? "\nfirst Friday (NFP day) - marked, not blocked" : "") + (crtSkips > 0 ? "\n" + str.tostring(crtSkips) + " day(s) stood aside" : "") + (crtFiltered > 0 ? " / " + str.tostring(crtFiltered) + " raids filtered out" : ""), text_color=color.white, text_size=size.tiny)
     table.cell(dash, 1, 12, ifvgMode == "Off" or ifvgMode == "Track only" ? "no entries" : ifvg_bull ? "LONG " + str.tostring(iv_entry, format.mintick) : ifvg_bear ? "SHORT " + str.tostring(iv_entry, format.mintick) : "none this bar", text_color=ifvg_bull or ifvg_bear ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 15, "KZL levels", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 15, not kzlOn ? "layer off" : str.tostring(array.size(kzY)) + " live / " + str.tostring(kzlSeen) + " made / " + str.tostring(kzlRaid) + " raided / " + str.tostring(kzlTake) + " taken", text_color=kzlRaid > 0 or kzlTake > 0 ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, 16, "KZL last", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 16, not kzlOn ? "layer off" : kzlLast == "" ? "no level tested yet" : kzlLast, text_color=color.white, text_size=size.tiny)
 
 alertcondition(best_bear, "BEST Bearish CISD", "BEST Bearish CISD")
 alertcondition(best_bull, "BEST Bullish CISD", "BEST Bullish CISD")
@@ -1787,3 +1947,7 @@ alertcondition(crtOn and crtEvArm, "CRT bound raided and accepted back", "refere
 alertcondition(crtOn and crtEvEntry, "CRT entry", "candle-range entry: trigger taken at the level the model names")
 alertcondition(crtOn and crtEvOut, "CRT outcome (target or stop)", "candle-range setup finished - the panel keeps the running count")
 alertcondition(crtOn and crtEvVoid, "CRT void / abandoned", "candle-range setup voided: accepted outside, both bounds taken, or no delivery in the window")
+// Two conditions, not ten: the session and the bound are in the alert() message text, so the chart only
+// needs to say "a level was raided" and "a level was taken" - the same split the CRT layer uses.
+alertcondition(kzlOn and kzlEvRaid, "KZL level raided and rejected", "a killzone session extreme was taken out and price closed back inside it")
+alertcondition(kzlOn and kzlEvTake, "KZL level taken", "a killzone session extreme was closed through, so the level is spent")

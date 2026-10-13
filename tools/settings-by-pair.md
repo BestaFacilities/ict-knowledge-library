@@ -21,7 +21,10 @@ silently assuming that chart. They no longer are.
 **Automatic regardless of any setting.** Anything measured in minutes or NY hours, because those are
 absolute time and not bar counts: the killzone blocks (`timeMode`, `kz_london`, `kz_ny`, `kz_asia`,
 `kz_loncls`, `kz_nypm`, `use_killzones`), the Silver Bullet and macro marks (`useSb`, `useMacro`), the
-after-hours cutoff (`stopHour`), the opening range (`useOR`, `orLenMin`, `orSweepA/B`), and the whole CRT
+after-hours cutoff (`stopHour`), the opening range (`useOR`, `orLenMin`, `orSweepA/B`), the killzone level
+pool (`kzl_s_asia`, `kzl_s_london`, `kzl_s_nyam`, `kzl_s_loncls`, `kzl_s_nypm`, `kzlPdhPd`, `kzlProject`,
+`kzlMitigate`, `kzlMaxLive`, `kzlDrawLabels`, `kzlShade`): the pooled windows are this file's five `w*`
+minute blocks, not a second set of times, so London and NY AM move with `Killzone set` and with nothing else), and the whole CRT
 clock (`crtAnchorH`, `crtAnchorLen`, `crtWinOpen`, `crtWinLen`, `crtDeliverH`, `crtCbdrMax`'s 14:00-20:00
 window, `crtAsiaMax`'s 20:00-00:00 window). Switch from 5m to 1H and these mean exactly what they meant
 before, which is the correct behaviour - 01:00 New York is 01:00 New York.
@@ -31,12 +34,12 @@ before, which is the correct behaviour - 01:00 New York is 01:00 New York.
 `max_obs_per_side`) is selected by the chart's timeframe, and the bar-count parameters the ladder never
 covered are rescaled to hold their *duration* still: `expiry_bars`, `liquidity_lookback`,
 `clean_after_bars`, `ifvgAge`, `crtObAge`, plus three values that used to be literals buried in the code -
-the FVG freshness window (10 bars), the order-block freshness window (12) and the 25-bar premium/discount
-range.
+the FVG freshness window (10 bars), the order-block freshness window (12), the 25-bar premium/discount
+range, and the killzone level layer's session minimum (`kzlMinBars`).
 
 **Still yours, on any pair, at any timeframe.** `pipSz`-denominated caps, the session you trade, your
-key levels, news times, the SMT sibling symbol, and whether the CRT layer is on at all (`crtOn` defaults
-to **off**). See section 4.
+key levels, news times, the SMT sibling symbol, whether the CRT layer is on at all (`crtOn`, default
+**off**), and whether the killzone level layer is (`kzlOn`, default **off**). See section 4.
 
 ## 2. What "auto" actually picks
 
@@ -66,19 +69,23 @@ only the ladder** - the windows keep following the chart, which is the point: on
 ### The numbers, generated
 
 ```
-| chart | tier it picks | scale | expiry | liq look | clean after | iFVG age | CRT / OB age | FVG / OB fresh | prem-disc | expiry as time | clean as time |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1m | `3min` | x5 | 300 | 60 | 175 | 900 | 60 | 50 / 60 | 125 | 5.0 h | 2.9 h |
-| 3m | `3min` | x1.67 | 100 | 20 | 58 | 300 | 20 | 17 / 20 | 42 | 5.0 h | 2.9 h |
-| 5m | `5min` | x1 | 60 | 12 | 35 | 180 | 12 | 10 / 12 | 25 | 5.0 h | 2.9 h |
-| 15m | `15min` | x0.3333 | 20 | 4 | 12 | 60 | 4 | 3 / 4 | 8 | 5.0 h | 3.0 h |
-| 30m | `30min` | x0.1667 | 10 | 3 | 6 | 30 | 3 | 3 / 3 | 8 | 5.0 h | 3.0 h |
-| 60m | `60min` | x0.0833 | 5 | 3 | 3 | 15 | 3 | 3 / 3 | 8 | 5.0 h | 3.0 h |
-| 4H | `240min` | x0.0208 | 3 | 3 | 3 | 4 | 3 | 3 / 3 | 8 | 12.0 h | 12.0 h |
-| 1D | `1D` | x0.0035 | 3 | 3 | 3 | 3 | 3 | 3 / 3 | 8 | 72 h | 72 h |
+| chart | tier it picks | scale | expiry | liq look | clean after | iFVG age | CRT / OB age | FVG / OB fresh | prem-disc | KZL session min | expiry as time | clean as time |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1m | `3min` | x5 | 300 | 60 | 175 | 900 | 60 | 50 / 60 | 125 | 30 | 5.0 h | 2.9 h |
+| 3m | `3min` | x1.67 | 100 | 20 | 58 | 300 | 20 | 17 / 20 | 42 | 10 | 5.0 h | 2.9 h |
+| 5m | `5min` | x1 | 60 | 12 | 35 | 180 | 12 | 10 / 12 | 25 | 6 | 5.0 h | 2.9 h |
+| 15m | `15min` | x0.3333 | 20 | 4 | 12 | 60 | 4 | 3 / 4 | 8 | 3 | 5.0 h | 3.0 h |
+| 30m | `30min` | x0.1667 | 10 | 3 | 6 | 30 | 3 | 3 / 3 | 8 | 3 | 5.0 h | 3.0 h |
+| 60m | `60min` | x0.0833 | 5 | 3 | 3 | 15 | 3 | 3 / 3 | 8 | 3 | 5.0 h | 3.0 h |
+| 4H | `240min` | x0.0208 | 3 | 3 | 3 | 4 | 3 | 3 / 3 | 8 | 3 | 12.0 h | 12.0 h |
+| 1D | `1D` | x0.0035 | 3 | 3 | 3 | 3 | 3 | 3 / 3 | 8 | 3 | 72 h | 72 h |
 ```
 
-Read the last two columns, not the middle ones. Expiry is 5.0 hours on every timeframe from 1m to 60m -
+Read the last two columns, not the middle ones, and treat `KZL session min` as a floor rather than a
+setting: `kzlMinBars` (6 at 5m) is `f_sc`-scaled like every other bar count, and `f_sc` never goes below 3,
+so a session has to span three bars to produce a level at all. That is fine from 1m to 30m. It bites at
+1H, where the two-hour windows (London close, NY PM) are 2 bars and so never make levels, and it kills the
+layer at 4H, where every session is one bar against a 3-bar floor. Run this layer on 1H or finer. Expiry is 5.0 hours on every timeframe from 1m to 60m -
 that is the property the rescaling exists to buy. Where a row stops matching, a floor is holding it up:
 at 4H every window is pinned at 3 bars (12 hours, not 5) and at 1D likewise (72 hours). Below
 `300/timeframe` the arithmetic cannot express "a fifth of a bar", so the behaviour degrades to "a handful
@@ -176,7 +183,10 @@ raised to a tenth of your ATR in ticks, `crtRangeMin` up to about 0.5 (a gold 4H
 noise), and `require_htf_bias` on because the counter-trend penalty in the sources is the largest reported
 win-rate killer. Expect the 01:30 playbook to be about liquidity sweeps of the Asian range rather than the
 daily open: gold's own open is not 08:00 NY, and this script does not know where it is - `useOR` is a
-08:00-NY rule.
+08:00-NY rule. If you turn on `kzlOn` here, read the `Add the prior day's high and low` tooltip before you
+judge the two PDH/PDL lines: on a CME feed the daily bar is the Globex session, so those bounds are not what
+a spot-FX chart would call yesterday's high and low - the discrepancy is the feed's day, and the level is
+still a level.
 
 **1H and above.** Use `preset = Custom` for the windows (the floors are doing more work than the scaling
 there, section 2) and read `60min`/`240min`/`1D` as an extrapolation in the alerts, not a tuned tier.
@@ -185,6 +195,13 @@ derive: `request.security`'s timeframe argument has to be a constant or an input
 is a computed string that the TradingView editor may reject outright - a total failure (the script will not
 paste) traded against a convenience, so it stays manual and the mapping is in the tooltip: 60 for 1m-5m,
 240 for 15m, 480 for 30m, D for 1H and above.
+
+The killzone level layer has a harder limit than tuning at coarse timeframes, and it is arithmetic: the
+session-span guard is `f_sc(kzlMinBars)`, `f_sc` never goes below 3, and no session window in this file is
+longer than four hours. At 1H that means the two-hour windows (London close, NY PM) can never make a level -
+they are 2 bars against a floor of 3 - and at 4H *every* session is 1 bar, so the layer runs, counts, draws
+nothing and stays silent in the alerts. 30m and finer is where it belongs; above that, read `KZL levels` in
+the panel as "0 live / 0 made" and know which of the two you are looking at.
 
 ## 6. Keeping this file true
 

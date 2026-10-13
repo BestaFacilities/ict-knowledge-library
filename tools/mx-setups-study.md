@@ -182,6 +182,14 @@ is the week-long comparison against your own letters that would earn the right t
 
 ## 8. Killzone level projections (screenshot of 2026-10-12, NQ 15m, `KZP [TFO]`) — inventory and plan
 
+> **Status 2026-10-13: P1 of this plan is built** in `tools/cisd-ultimate-balanced.pine` - group `grp_kzl`,
+> 13 inputs, default off, guide §8, record in audit §17. P2 (the score and the gate consuming a level, and
+> the setup models) is not, and nothing in this section should be read as if it were. Two deviations, both
+> deliberate and both written into the source where they would otherwise be mistaken for an oversight:
+> per-session `kzl_s_*` switches rather than the five `kz_*` gate flags, and a `kzlRaid` must-fire key that
+> needed `sweepStrict` relaxed to fire on synthetic bars (see the plan below: it predicted `kzlSwp > 0`
+> would come free. It did not).
+
 ### What the picture contains, element by element
 
 | element | read of it | do we have it |

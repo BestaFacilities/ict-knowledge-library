@@ -83,11 +83,16 @@ PROBES = {
                                  'plot(invSeen, "inverted")'],
     "cisd-ultimate-balanced.pine": ['plot(array.size(ivTop), "izones")', 'plot(array.size(fvTop), "igaps")',
                                     'plot(box.count(), "boxes")', 'plot(line.count(), "lines")', 'plot(crtState, "crtState")', 'plot(crtSeen, "crtSeen")', 'plot(crtSweeps, "crtSwp")', 'plot(crtEntries, "crtEnt")', 'plot(crtVoids, "crtVoid")', 'plot(crtFiltered, "crtFilt")', 'plot(crtNetR, "crtNetR")', 'plot(crtWhyCode, "crtWhy")',
-                                    'plot(label.count(), "labels")'],
+                                    'plot(label.count(), "labels")',
+                                    'plot(kzlSeen, "kzlSeen")', 'plot(kzlRaid, "kzlRaid")',
+                                    'plot(kzlTake, "kzlTake")', 'plot(array.size(kzY), "kzlLv")'],
 }
 
 
-def build(src: Path, dst: Path, extra_subs=()) -> None:
+def build(src: Path, dst: Path, extra_subs=()):
+    """Return the extra_subs that matched no line. A typo in a sub silently turns an exercise into a
+    duplicate of the default run, whose 'fire' line would then be reporting on a variant that never
+    existed - so an unmatched sub is an error, not a shrug."""
     text = src.read_text(encoding="utf-8")
     text = text.encode("ascii", "ignore").decode("ascii")
 
@@ -108,13 +113,16 @@ def build(src: Path, dst: Path, extra_subs=()) -> None:
         for old, new in SUBS:
             if old in lines[i]:
                 lines[i] = lines[i].replace(old, new)
+    hit = set()
     for ln_i, ln in enumerate(lines):
-        for ex_old, ex_new in extra_subs:
+        for si, (ex_old, ex_new) in enumerate(extra_subs):
             if ex_old in ln:
                 lines[ln_i] = ln.replace(ex_old, ex_new, 1)
+                hit.add(si)
                 break
     lines += PROBES.get(src.name, []) + [""]
     dst.write_text("\n".join(lines), encoding="utf-8")
+    return [old for si, (old, _) in enumerate(extra_subs) if si not in hit]
 
 
 # Named exercise variants, applied on top of SUBS, one extra run each. They exist because a
@@ -212,6 +220,26 @@ EXERCISES = {
          # closed"), which is the correct verdict for that data. Proving the re-roll reaches a verdict is
          # this variant's job; proving a sweep fires belongs to variants 1-3, where it is required.
          ["crtSeen", "crtState"]),
+        # The killzone level layer (tools/mx-setups-study.md section 8) is a session-windowed thing, and
+        # pyne's clock sits at nyMin=39 forever, so every f_win window is closed and the whole layer would
+        # run inert - the exact green-result-from-dead-code failure this file exists to catch. The sub is
+        # the documented alternating clock: even bars inside London (150), odd bars outside (750), which
+        # rolls a session boundary every other bar so levels get MADE, then tested. kzlMinBars drops to 1
+        # because a one-bar synthetic session would otherwise never qualify. What this proves: levels are
+        # created, projected, raided and retired, and the caps hold. What it cannot prove: that 02:00-05:00
+        # is the right window for your symbol on your feed, or that a real session spans 36 bars.
+        ("killzone levels: sessions, raids, mitigation",
+         [('kzlOn         = input.bool(false,', 'kzlOn         = input.bool(true,'),
+          ('kzlMinBars    = input.int(6,', 'kzlMinBars    = input.int(1,'),
+          ('int nyMin = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")',
+           'int nyMin = 150 + (bar_index % 2) * 600'),
+          # The raid branch needs a wick of sweepWick x range beyond the level and a close back inside.
+          # The synthetic series trends hard enough that 0 of 1198 tested levels looked like that - the
+          # counter stayed at zero with the code obviously running, which is the same dead-green trap as
+          # a dead switch. Relaxing the *parameter* (never the logic) makes the branch fire; the strict
+          # default stands on a real chart, where 89% of the hits closed through and are counted as takes.
+          ('sweepStrict = input.bool(true,', 'sweepStrict = input.bool(false,')],
+         ["kzlSeen", "kzlRaid", "kzlTake"]),
     ],
 }
 
@@ -284,7 +312,12 @@ def main() -> int:
               % (ms, min(r[1] for r in runs), len(runs), bars, counts, runs[0][3]))
         for name, extra, must in EXERCISES.get(src.name, []):
             vdst = Path("/tmp") / ("gate-%s.pine" % re.sub(r"\W+", "-", name))
-            build(src, vdst, extra)
+            dead_sub = [] if raw else build(src, vdst, extra)
+            if dead_sub:
+                rc_all = 1
+                print("  PROBLEM exercise %-32s matches no line, so it is the default run and proves nothing:\n          %s"
+                      % (name, "\n          ".join(s[:70] for s in dead_sub)))
+                continue
             wall, rc, out, err = min(run_copy(vdst, bars, reps=3), key=lambda r: r[0])
             if rc != 0:
                 rc_all = 1

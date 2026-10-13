@@ -155,6 +155,11 @@ fixed across the whole file, not just at the quoted line.
 7. Hard caps worth knowing for a script this size: 40 `request.*` calls, 64 plots, 500
    lines/boxes/labels, ~100 000 compiled tokens, 1 000 variables per scope. This script uses 5
    security calls, 8 plots, and ≈7.7k lexical tokens, so there is headroom.
+8. *A function may not assign to a global.* It can read one and it can call methods on one
+   (`array.remove(kzY, i)`, `line.set_x2(l, bar_index)`), but `counter += 1` on a global scalar inside a
+   function body is `Cannot modify global variable "counter" in function`. Mutators for global counters
+   belong at the call sites, guarded the same way the function guards them. Learned writing the `grp_kzl`
+   layer (§17); `pyne check` said nothing about it.
 
 **How it was verified in the sandbox.** `hoox-pyne` (ANTLR v6 grammar + AST + object-mode
 interpreter) gives `pyne check` / `pyne lint` / `pyne run`, and ships the TradingView v6 builtin
@@ -1040,3 +1045,73 @@ by the prior-session latch added above; `pipSz`'s "10 ticks = 1 pip" heuristic s
 used); and `analysis`/`Score` on the panel still reflect the current bar only, which is a display choice with
 no signal attached and the kind of thing to change when someone asks, not on a general read.
 
+## 17. The killzone level layer (2026-10-13): what shipped, what the compiler caught, and what the green run does not mean
+
+**The ask, and why I answered it with code.** "okay now what", with every remaining item on the list needing
+your chart - the 01:00-02:30 NY watch, the `why-not` reading, the paste. So the queued P1 of
+`tools/mx-setups-study.md` §8 was built: session extremes (Asia / London / NY AM / London close / NY PM) plus
+the prior day's bounds, projected until taken, with a live → raided-and-held → taken state machine, `bgcolor`
+shading of the forming session, two `alertcondition`s, two panel rows, default **off**. P2 - the score and the
+gate consuming a level - is not built, and the file says so where a future reader will trip over it.
+
+**Cost to the file, measured rather than remembered.** 158 lines (712-869), 13 inputs, 13 `var` arrays plus 4
+scalars, 6 functions, **zero** new `request.security` calls - `pd_high`/`pd_low` ride the daily tuple the 2017
+stand-aside list already asks for - and zero new plots. `table.new(..., 2, 18)` is the other real change: the
+dashboard grid grew from 16 rows to 18 to make room for rows 15 and 16, which is exactly the sort of edit that
+hides a silent collision, and the harness's grid probe reads the rendered table rather than trusting me.
+
+**One deviation from the plan, chosen on purpose.** `kzl_s_*` per-session switches instead of reusing the five
+`kz_*` gate flags. `kz_asia` off means "do not signal in Asia"; it does not mean the Asian range is
+irrelevant, which is what a London-session trader wants to know. The windows themselves are *not* duplicated:
+`kzA`/`kzB` hold the same minute pairs as `wLondon`/`wNyAm`/`wAsiaKz`/`wLonCls`/`wNyPm` (so London and NY AM
+still move with `Killzone set`), only the switches are separate. The 20:00-00:00 Asia pooled here is the
+gate's Asia and the 2017 list's Asia; the *target* preference list still uses the file's 18:00-02:00
+accumulator, and both stay labelled rather than quietly unified.
+
+**Two v6 errors, both semantic, one of them a rule this list did not have:**
+
+    Cannot modify global variable "kzlSeen" in function      (f_kzPush tried to bump the counter)
+    Undefined variable 'kzB'                                 (the window-ends array was declared kB)
+
+The first is now rule 8 in §5: a function may read a global and call methods on it, but may not assign to the
+binding, so `kzlSeen += 2` lives at the two call sites. The second is my own habit of naming an identifier
+from memory instead of reading the region I am patching; it has its own entry in the error lists of at least
+three earlier rounds and deserves no further defence. **`pyne check` passed both**, which is worth stating
+again because it keeps being the interesting fact: syntax-only validation accepts files the compiler rejects,
+so `pine-lint` stays the primary gate in `tools/README.md`.
+
+**The harness.** Four probes (`kzlSeen`, `kzlRaid`, `kzlTake`, `array.size(kzY)` as `kzlLv`) and a sixth
+exercise. The study file's prescription was followed and then extended: `kzlOn → true`, `kzlMinBars → 1` (a
+one-bar synthetic session would otherwise never clear the span guard) and the alternating-clock sub
+`int nyMin = 150 + (bar_index % 2) * 600` - without it pyne's frozen `nyMin = 39` means no session ever
+closes and the layer is inert behind a green result. Counters: 1198 levels made, 599 raided and held, 599
+taken, registry pinned at exactly `kzlMaxLive = 12`; the cap is verified by the number being pinned, not by
+reading the `while` loop. The default run and the five earlier exercises came back with counters **identical**
+to build `83d4019`, which is what "off means off" looks like when somebody else has to believe it. That is a
+counter comparison only - the venv is 0.6.9, earlier rounds' timings are not controls, and no timing claim is
+made.
+
+**The raid branch needed a parameter, not a patch.** First run: `kzlTake = 599`, `kzlRaid = 0`. Not a bug -
+the synthetic series trends, so across 1198 tested levels not one ended wick-through-then-close-back-inside,
+which is what `sweepStrict` demands of a raid. A zero is precisely what dead code looks like, and the only way
+to tell the two apart here was to make the branch reachable: the exercise relaxes `sweepStrict` (a shipped
+input, switched the way a user would switch it) and the branch fires 599 times. Widening a *parameter* is
+allowed; widening the *logic* - an `or true` - is what TAUTOLOGY exists to catch, and it would have caught this
+if I had taken the lazy route.
+
+**A new rule in the harness itself, from the same reflex.** `build()` now returns the exercise subs that
+matched no line, and an unmatched sub is a `PROBLEM` with a non-zero exit. Before this, a typo in a variant -
+`kzlMinBars` written `kzlMinBarsTypo` - silently downgraded that variant to a second copy of the default run,
+and the run still printed `fire` with the *default* counters, i.e. a report on a variant that never existed.
+Control: introduce that typo, run, watch it fail. It is the same idea as the must-fire keys, one level up.
+
+**What is not verified, and who has to do it.** Offline, this round: `pine-lint` clean on every `.pine` in
+the repo (working file and archive), `pine-validate` CLEAN on the target (with `--selftest` PASS: 14 findings on the synthetic fixture, 5 on
+the real control), `pyne check` OK, `pine-gate-run.py` rc=0 with 6/6 exercises firing, `tools/lint.py` 0
+problems. Nothing here was compiled by TradingView. The label sitting at the session edge, the `bgcolor`
+landing on a live session, rows 15/16 not colliding with the CRT rows in the rendered panel, and PDH/PDL on a
+Globex day are things the reference interpreter can reason about but not show. §5's rule-7 headroom figures
+predate both added layers and were counted with that round's tooling; the honest version of the claim is that
+this layer adds no security call and no plot, which are the two caps that bite on a script this size. And
+§9d's standing limit holds: an exercise firing proves the path executes, not that the window is right for your
+symbol and feed - which is why step 10 of guide §7 is still unpaid.

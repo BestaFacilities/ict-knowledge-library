@@ -10,13 +10,13 @@ editor. Everything else here is either documentation, verification tooling, or a
 
 | path | what it is |
 |---|---|
-| `cisd-ultimate-balanced.pine` | the working indicator: CISD detector + iFVG registry + time engine (killzones, Silver Bullet hours, macro cores, NY AM opening range) + zone map. |
-| `cisd-v1-guide.md` | how to use it: every switch and its default, the iFVG-at-the-open recipe, the panel legend, measured cost, and §7 - install and configure it on TradingView step by step, including how to confirm you are not looking at a stale build. |
+| `cisd-ultimate-balanced.pine` | the working indicator: CISD detector + iFVG registry + time engine (killzones, Silver Bullet hours, macro cores, NY AM opening range) + zone map, plus two optional layers that are off until you switch them on: the 4H candle range (`grp_crt`) and the killzone level projections (`grp_kzl`). |
+| `cisd-v1-guide.md` | how to use it: every switch and its default, the iFVG-at-the-open recipe, the panel legend, measured cost, §8 - the killzone level layer - and §7 - install and configure it on TradingView step by step, including how to confirm you are not looking at a stale build. |
 | `cisd-audit.md` | the running record: what was found wrong in each revision, how it was verified, what the reference runtime cannot certify (§9d), and one section per round. Read §1-§2 for why the pasted v1's Noise Filter and sweep test could not do what their labels said. |
 | `crt-candle-range-study.md` | the current phase: the 4H-candle-range / 01:30-sweep breakdowns you sent, inventoried element by element against the corpus, with the extend-vs-new verdict, the build spec (all switches named), and what I recommend not building. |
 | `settings-by-pair.md` | the maintained settings matrix: what adapts to the timeframe on its own, what is derived, what you still set per pair and per session, plus the generated per-timeframe table and a starting configuration for FX / gold / indices. Update it in the same commit as any input change. |
 | `tf-scale-table.py` | prints the markdown table that `settings-by-pair.md` and guide §6 quote, from the same formula the script ships. Re-run it rather than retyping numbers. |
-| `mx-setups-study.md` | the setup inventory: what a reference set of iFVG/HTF-array screenshots actually contains, feature by feature, with the extend-vs-new build decision and the object/`request.security` budget that follows from it. This is the page the current phase (screenshots → new or refined tools) starts from. |
+| `mx-setups-study.md` | the setup inventory: what a reference set of iFVG/HTF-array screenshots actually contains, feature by feature, with the extend-vs-new build decision and the object/`request.security` budget that follows from it. Its §8 is the killzone-level plan: P1 shipped on 2026-10-13 (audit §17), P2 did not. This is the page the current phase (screenshots → new or refined tools) starts from. |
 | `archive/` | set aside, not deleted: `cisd-ultimate-proper-v2.pine` (+ its guide) and `mx-context-overlay.pine` (+ its guide), the superseded `cisd-ultimate-journal.pine`, and `cisd-ultimate-balanced.pristine-v1.pine`, which is v1 exactly as it arrived so any decision in §13 of the audit can be reversed. |
 
 ## Verification, in this order
