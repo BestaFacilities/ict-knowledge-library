@@ -234,10 +234,14 @@ earns or loses the right to be called optimal: compare months, not afternoons.
 | Session opens | `Draw the true-day and 09:30 opens` | **on** | reference lines; on an index the 09:30 cash open is a real level |
 | Killzone levels | `Track each session's high and low as a level` | **on** | the layer the score now reads |
 | Killzone levels | session switches | **all five on**, `Add the prior day's high and low` on | full day = five sessions of pools; remember the Globex-day caveat on PDH/PDL |
-| Killzone levels | `Live levels kept` | **20** | five sessions × 2 bounds + PDH/PDL is 12 a day; at 12 the cap eats yesterday's un-raided levels, which are the point of `Until taken` |
+| Killzone levels | `Live levels kept` | **12** | five sessions × 2 bounds + PDH/PDL is 12 a day. This sheet first said 20, for the multi-day un-raided levels; the screenshot that came back is the correction. Prior days are carried by dimming and the taken-count, not by keeping every line at full weight |
 | Killzone levels | `Projection` / `A level is taken when` | `Until taken` / `Close through` (defaults) | |
 | Killzone levels (look) | windows | **empty** | empty keeps levels and gate on the same times by construction |
 | Killzone levels (look) | colours / names / style | defaults | yours; the defaults are the ones the screenshots already read |
+| Killzone levels | `Keep taken levels drawn` | **off** | a taken level is a count and a panel row, not a permanent dotted stub |
+| Killzone levels | `Shade the session that is forming` | **off** | the bands paint every historical day at full height; the levels carry the same information without the wallpaper. On a single-session chart this is a taste call, not a rule |
+| Forming Setup Visuals | `Show swing liquidity lines`, `Show swing dots and sweep arrows` | off (shipped defaults since the declutter build) | the pools and sweeps still compute; the lattice of lines was legacy v1 ink |
+| Appearance | `Compact dashboard (essential rows only)` | **on** | ten rows: score, bias, window, readiness, CRT state, levels, journal. The full panel is one switch away on debugging days |
 | Appearance | `Dashboard position` | `Bottom left` | top right is where MNQ's recent bars and the level labels live |
 | Appearance | `Overlay painted candles…` | **off** | your own candle colours back; screenshots stop lying about which script drew what |
 

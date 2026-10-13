@@ -1248,3 +1248,36 @@ entries resolve the way the journal counts them — BEST has never fired on synt
 journal's push/resolve branches are compile-verified and loop-executed, and their first real evidence
 is the user's chart. The default run's counters are unchanged from §18, which is the neutrality claim
 for the whole round.
+
+## 20. The declutter round (2026-10-13, fourth build of the day)
+
+**The evidence was a screenshot of the previous build working as configured.** MNQ1! 3m with the §5
+profile applied in full: the panel showed roughly 140 killzone levels made with a double-digit live count,
+the journal was grading trades, SMT was in the score parts — and the chart underneath was unreadable.
+Session bands across every historical day, killzone lines at every price the week had touched, the v1
+swing lattice (up to 40 lines a side, plus 24 spent), boxes, dots, arrows, and 18 rows of dashboard over
+the recent bars. "So cluttered" is a complete bug report when the configuration that produced it was the
+one this repository recommended, and four of the five causes were defaults or settings-sheet values from
+§19's own round: `Live levels kept = 20` (my number, in the sheet, for a reason that sounded good —
+multi-day un-raided levels — and cost more than it bought), the session shade on, the legacy swing lines
+on since v1, and taken levels kept as permanent stubs.
+
+**What changed, and the line it does not cross.** Everything in this round is drawing-layer: two switches
+whose defaults flipped (`Show swing liquidity lines`, `Show swing dots and sweep arrows` — the pools,
+sweeps and latches behind them are untouched, and the flip is called out in the tooltips and guide §10
+under the same rule as the §18 shade change), `Keep taken levels drawn` (default preserves the shipped
+picture; the profile turns it off), `Dim levels from prior days` (one repaint per level, guarded by a
+per-level flag so it cannot become a per-bar cost), and `Compact dashboard` (ten essential rows,
+renumbered at the cell site; hidden rows still compute). Not one condition, threshold, counter or alert
+moved. The registry learned one new array (`kzDim`) and one new counter (`kzlDimCt`), which exists for
+the same reason every counter here exists: so the gate can prove the dimming branch executes rather than
+trust that it does.
+
+**Verified how.** `pine-lint` clean, `pine-validate` CLEAN, `pyne check` OK. The gate's ninth exercise
+(deleted-on-take plus dimming plus the compact table, alternating clock) must fire `kzlSeen`, `kzlTake`
+and `kzlDim`, and the default run's counters are unchanged from §19 — that identity is the neutrality
+proof for a round whose entire claim is "same information, less ink". What no runtime here can certify
+is the actual complaint: whether the chart *reads* better. That judgment belongs to the next screenshot,
+and this section will be wrong in an interesting way if it shows the lines were load-bearing after all —
+`Show swing liquidity lines` on is one click back to the v1 picture, which is exactly why the switches
+were built instead of the code deleted.

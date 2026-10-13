@@ -1,5 +1,5 @@
 //@version=6
-indicator("CISD Ultimate Balanced · build 2026-10-13-context", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
+indicator("CISD Ultimate Balanced · build 2026-10-13-declutter", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
 
 // ═══════════════════════════════════════════════════════════════════
 // PRESET SYSTEM
@@ -57,6 +57,8 @@ grp_form = "======= Forming Setup Visuals ======="
 show_live_fvgs      = input.bool(true, "Show Live FVGs", group=grp_form)
 show_live_obs       = input.bool(true, "Show Live Order Blocks", group=grp_form)
 show_live_ifvgs     = input.bool(true, "Show Live iFVGs", group=grp_form)
+showSwingLines      = input.bool(false, "Show swing liquidity lines", group=grp_form, tooltip="DEFAULT CHANGED 2026-10-13 (look only): the swing pools are still tracked, swept, tested and retired exactly as before - this only decides whether their lines are painted. Up to 40 lines a side plus the spent list was most of the ink on a busy chart, which is what the screenshot that prompted this showed. On restores the v1 picture in full.")
+showPivotDots       = input.bool(false, "Show swing dots and sweep arrows", group=grp_form, tooltip="DEFAULT CHANGED 2026-10-13 (look only): the SH/SL pivot dots and the Strong Bull/Bear sweep arrows. The sweeps still latch, score and alert with this off; it is the glyphs that go.")
 max_fvgs_inp        = input.int(2, "Max FVGs per side", minval=1, maxval=4, group=grp_form)
 max_obs_inp         = input.int(1, "Max OBs per side", minval=1, maxval=2, group=grp_form)
 fvg_transparency    = input.int(88, "FVG Transparency", minval=70, maxval=95, group=grp_form)
@@ -171,6 +173,7 @@ show_candles = input.bool(true, "Overlay painted candles in the trend colour", g
 hide_expired_levels   = input.bool(true, "Hide Expired Levels", group="Appearance")
 spentMax     = input.int(24, "Keep up to N spent levels visible", minval=0, maxval=200, group="Appearance", tooltip="The leak this replaces: taken levels were dropped from the array but only deleted from the chart when 'Hide Mitigated Levels' was on, which defaulted to off - so every taken level stayed on the chart forever, up to max_lines_count, after which TradingView starts evicting the OLDEST objects, live ones included. 0 = delete on take, as it should have been.")
 show_dashboard        = input.bool(true, "Show Dashboard", group="Appearance")
+dashCompact           = input.bool(false, "Compact dashboard (essential rows only)", group="Appearance", tooltip="Ten rows instead of eighteen: header, Score, Prem/Disc, HTF Bias, Window, Ready, 4H CRT, KZL levels, KZL last, BEST record. The hidden rows (zone counts, Score parts, iFVG tap, open range, CRT why) still compute and still alert - they just stop occupying the corner of the chart. CRT why is the one real loss; turn this off on a day you are debugging the CRT layer.")
 dashPosIn             = input.string("Top right", "Dashboard position", options=["Top right", "Top left", "Bottom right", "Bottom left", "Top center", "Bottom center"], group="Appearance", tooltip="The panel used to be nailed to the top right corner, which is also where the price scale and the session levels want to live. Bottom left is the one that stops it covering the recent bars.")
 string dashPos = dashPosIn == "Top right" ? position.top_right : dashPosIn == "Top left" ? position.top_left : dashPosIn == "Bottom right" ? position.bottom_right : dashPosIn == "Bottom left" ? position.bottom_left : dashPosIn == "Top center" ? position.top_center : dashPosIn == "Bottom center" ? position.bottom_center : position.top_right
 
@@ -358,9 +361,9 @@ var line[] swinghighs = array.new_line()
 var line[] swinglows  = array.new_line()
 
 if not na(pivhigh)
-    array.unshift(swinghighs, line.new(bar_index-len, high[len], bar_index, high[len], color=color.new(chart.fg_color, 60)))
+    array.unshift(swinghighs, line.new(bar_index-len, high[len], bar_index, high[len], color=color.new(chart.fg_color, showSwingLines ? 60 : 100)))
 if not na(pivlow)
-    array.unshift(swinglows, line.new(bar_index-len, low[len], bar_index, low[len], color=color.new(chart.fg_color, 60)))
+    array.unshift(swinglows, line.new(bar_index-len, low[len], bar_index, low[len], color=color.new(chart.fg_color, showSwingLines ? 60 : 100)))
 
 var float last_wicked_high_level = na
 var float last_wicked_low_level  = na
@@ -387,7 +390,7 @@ f_sweepLo(float lvl) =>
 f_retire(line l) =>
     if spentMax > 0
         line.set_x2(l, bar_index)
-        line.set_color(l, color.new(chart.fg_color, 76))
+        line.set_color(l, color.new(chart.fg_color, showSwingLines ? 76 : 100))
         line.set_style(l, line.style_dotted)
     else
         line.delete(l)
@@ -965,6 +968,8 @@ kzlMinBars    = input.int(6, "A session must span at least this many bars", minv
 kzlMaxLive    = input.int(12, "Live levels kept", minval=2, maxval=40, group=grp_kzl, tooltip="Five sessions, two bounds, a day and a half is ten. Past this the oldest are dropped, so the count is bounded whatever the timeframe.")
 kzlDrawLabels = input.bool(true, "Label each level", group=grp_kzl, tooltip="Where the label goes, what it says and how big it is are all inputs below. A live level costs nothing per bar in the default placement; 'At the right edge' is the one option that does cost, and its tooltip says how much.")
 kzlShade      = input.bool(true, "Shade the session that is forming", group=grp_kzl, tooltip="bgcolor, on purpose: the session spans would otherwise be boxes, and max_boxes_count is 80 shared with the FVG and order-block registries, where box starvation has already been an audited failure in this file.")
+kzlDrawTaken  = input.bool(true, "Keep taken levels drawn", group=grp_kzl, tooltip="On = a taken level stays on the chart as the dotted grey stub, cut off at the bar that closed through it - the shipped picture. Off = the line and its label are deleted on the bar it is taken, which on a multi-day chart is the difference between a record and a rug. The taken COUNT is kept either way; this is only about the object.")
+kzlDimOld     = input.bool(true, "Dim levels from prior days", group=grp_kzl, tooltip="A live level born before today is repainted at 68 transparency the first time a later day touches the loop. Yesterday's un-raided Asia high is still the draw - it just stops shouting at the same volume as the level price is actually approaching. One repaint per level, ever.")
 // The inputs above are what the layer MEANS. Everything in the group below is how it looks and
 // where its times come from, and it is a separate group because "fully customizable" is a real
 // request, not a polish job: colour, name, window, label text, label position, line style, line
@@ -1015,6 +1020,7 @@ var array<int>   kzBorn = array.new_int()
 var array<int>   kzSt  = array.new_int()
 var array<line>  kzLn  = array.new_line()
 var array<label> kzLb  = array.new_label()
+var array<int>   kzDim = array.new_int()
 var int   kzDayN  = 0
 var int   kzlSeen = 0
 var int   kzlRaid = 0
@@ -1070,6 +1076,7 @@ f_kzApplyWin(string spec, int s) =>
 var int kzlBadWin  = 0
 var int kzlWinCust = 0
 var int kzlLblTick = 0
+var int kzlDimCt   = 0
 if barstate.isfirst
     int w0 = f_kzApplyWin(kzl_asiaWin, 0)
     int w1 = f_kzApplyWin(kzl_londonWin, 1)
@@ -1092,6 +1099,7 @@ f_kzDrop(int i) =>
     array.remove(kzSt, i)
     array.remove(kzLn, i)
     array.remove(kzLb, i)
+    array.remove(kzDim, i)
 // A function may not assign a global in v6 - the compiler answers 'Cannot modify global
 // variable' - so the counter belongs to the call sites, which guard the same way this does.
 f_kzPush(float y, int sid, int dir) =>
@@ -1105,6 +1113,7 @@ f_kzPush(float y, int sid, int dir) =>
         array.unshift(kzSt, 0)
         array.unshift(kzLn, l)
         array.unshift(kzLb, lb)
+        array.unshift(kzDim, 0)
 
 if kzlOn
     for sh = 0 to 4
@@ -1154,13 +1163,27 @@ if kzlOn and array.size(kzY) > 0
             bool touched = dir > 0 ? high >= y : low <= y
             bool through = dir > 0 ? close > y : close < y
             line l = array.get(kzLn, i)
+            if kzlDimOld and st == 0 and born < kzDayN and array.get(kzDim, i) == 0
+                array.set(kzDim, i, 1)
+                kzlDimCt += 1
+                if not na(l)
+                    line.set_color(l, color.new(f_kzCol(sid), 68))
             if touched and (kzlMitigate == "Wick through" or through)
                 array.set(kzSt, i, 2)
-                if not na(l)
-                    line.set_extend(l, extend.none)
-                    line.set_x2(l, bar_index)
-                    line.set_color(l, color.new(color.gray, 55))
-                    line.set_style(l, line.style_dotted)
+                if kzlDrawTaken
+                    if not na(l)
+                        line.set_extend(l, extend.none)
+                        line.set_x2(l, bar_index)
+                        line.set_color(l, color.new(color.gray, 55))
+                        line.set_style(l, line.style_dotted)
+                else
+                    label yl = array.get(kzLb, i)
+                    if not na(l)
+                        line.delete(l)
+                        array.set(kzLn, i, na)
+                    if not na(yl)
+                        label.delete(yl)
+                        array.set(kzLb, i, na)
                 kzlTake += 1
                 kzlEvTake := true
                 kzlLast := f_kzTag(sid, dir) + ' ' + str.tostring(y, format.mintick) + ' closed through'
@@ -2324,11 +2347,11 @@ if auto_invalidate and array.size(active_origins) > 0
             if i < array.size(active_liq_labels)
                 array.remove(active_liq_labels, i)
 
-plotshape(bearish_sweep and not best_bear ? high : na, "Strong Bear", shape.labeldown, location.abovebar, color.new(red, 60), size=size.tiny, text="▼")
-plotshape(bullish_sweep and not best_bull ? low  : na, "Strong Bull", shape.labelup, location.belowbar, color.new(green, 60), size=size.tiny, text="▲")
+plotshape(showPivotDots and bearish_sweep and not best_bear ? high : na, "Strong Bear", shape.labeldown, location.abovebar, color.new(red, 60), size=size.tiny, text="▼")
+plotshape(showPivotDots and bullish_sweep and not best_bull ? low  : na, "Strong Bull", shape.labelup, location.belowbar, color.new(green, 60), size=size.tiny, text="▲")
 
-plotchar(not na(pivhigh) ? high[len] : na, "SH", "●", location.absolute, red, size=size.tiny, offset=-len)
-plotchar(not na(pivlow)  ? low[len]  : na, "SL", "●", location.absolute, green, size=size.tiny, offset=-len)
+plotchar(showPivotDots and not na(pivhigh) ? high[len] : na, "SH", "●", location.absolute, red, size=size.tiny, offset=-len)
+plotchar(showPivotDots and not na(pivlow)  ? low[len]  : na, "SL", "●", location.absolute, green, size=size.tiny, offset=-len)
 
 color candle_col  = color.from_gradient(t1, 0, 100, trend > 0 ? green : red, chart.bg_color)
 color candle_col_ = color.from_gradient(t2, 0, 100, trend > 0 ? green : red, chart.bg_color)
@@ -2346,44 +2369,60 @@ if analysis == ""
     analysis := "Clear"
 
 if show_dashboard and barstate.islast
-    var table dash = table.new(dashPos, 2, 18, bgcolor=color.new(#0d0d0d, 15), border_width=1)
-    table.cell(dash, 0, 0, "CISD Ultimate", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 0, tier + ' / ' + timeframe.period + (tfScaled ? ' x' + str.tostring(tfScale, '#.####') : preset == "Custom" ? ' windows as written' : ' no bar duration here'), text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 1, "Score", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 1, str.tostring(score) + " " + grade, text_color=score >= 3 ? green : score == 2 ? color.yellow : red, text_size=size.small)
-    table.cell(dash, 0, 2, "Analysis", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 2, analysis, text_color=color.white, text_size=size.tiny)
-    table.cell(dash, 0, 3, "Live FVGs", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 3, str.tostring(array.size(live_bull_fvgs) + array.size(live_bear_fvgs)), text_color=color.white, text_size=size.tiny)
-    table.cell(dash, 0, 4, "Live OBs", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 4, str.tostring(array.size(live_bull_obs) + array.size(live_bear_obs)), text_color=color.white, text_size=size.tiny)
-    table.cell(dash, 0, 5, "iFVG", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 5, ifvgMode == "Off" ? "layer off" : str.tostring(array.size(ivTop)) + " inverted / " + str.tostring(array.size(fvTop)) + " gaps", text_color=array.size(ivTop) > 0 ? green : color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 6, "Prem/Disc", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 6, in_discount ? "Discount" : "Premium", text_color=in_discount ? green : red, text_size=size.tiny)
-    table.cell(dash, 0, 7, "HTF Bias", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 7, htf_bull ? "Bullish" : "Bearish", text_color=htf_bull ? green : red, text_size=size.tiny)
-    table.cell(dash, 0, 8, "Window", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 8, (inWindow ? "in " : "out of ") + timeMode + (inSb ? " +SB" : "") + (inMac ? " +MACRO" : "") + (newsBlk ? " +NEWS-HALT" : newsOn and newsBad > 0 ? " +NEWS?" : ""), text_color=newsBlk ? color.orange : inWindow ? green : color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 9, "Ready", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 9, can_signal ? "YES" : newsBlk ? "NEWS-HALT" : "Cooldown", text_color=can_signal ? green : color.orange, text_size=size.tiny)
-    table.cell(dash, 0, 10, "Open range", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 10, not useOR ? "off" : na(orHi) ? "building" : str.tostring(orHi, format.mintick) + " / " + str.tostring(orLo, format.mintick) + (orHiTaken ? " H taken" : "") + (orLoTaken ? " L taken" : ""), text_color=useOR and (orHiTaken or orLoTaken) ? green : color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 11, "Score parts", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 11, "liq fvg htf ob" + (scDisp ? " disp" : "") + (scPrem ? " prem" : "") + (scBody ? " body" : "") + (scIfvg and ifvgMode != "Off" ? " ifvg" : "") + (scKzl ? kzlOn ? " kzl" : " kzl-off" : "") + (scSmt ? na(sibHi) ? " SMT-NODATA" : " smt" : ""), text_color=color.white, text_size=size.tiny)
-    table.cell(dash, 0, 12, "iFVG tap", text_color=color.gray, text_size=size.tiny)
+    var table dash = table.new(dashPos, 2, dashCompact ? 10 : 18, bgcolor=color.new(#0d0d0d, 15), border_width=1)
+    table.cell(dash, 0, dashCompact ? 0 : 0, "CISD Ultimate", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, dashCompact ? 0 : 0, tier + ' / ' + timeframe.period + (tfScaled ? ' x' + str.tostring(tfScale, '#.####') : preset == "Custom" ? ' windows as written' : ' no bar duration here'), text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 1 : 1, "Score", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 1 : 1, str.tostring(score) + " " + grade, text_color=score >= 3 ? green : score == 2 ? color.yellow : red, text_size=size.small)
+    if not dashCompact
+        table.cell(dash, 0, 2, "Analysis", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 2, analysis, text_color=color.white, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 3, "Live FVGs", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 3, str.tostring(array.size(live_bull_fvgs) + array.size(live_bear_fvgs)), text_color=color.white, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 4, "Live OBs", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 4, str.tostring(array.size(live_bull_obs) + array.size(live_bear_obs)), text_color=color.white, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 5, "iFVG", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 5, ifvgMode == "Off" ? "layer off" : str.tostring(array.size(ivTop)) + " inverted / " + str.tostring(array.size(fvTop)) + " gaps", text_color=array.size(ivTop) > 0 ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 2 : 6, "Prem/Disc", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 2 : 6, in_discount ? "Discount" : "Premium", text_color=in_discount ? green : red, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 3 : 7, "HTF Bias", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 3 : 7, htf_bull ? "Bullish" : "Bearish", text_color=htf_bull ? green : red, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 4 : 8, "Window", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 4 : 8, (inWindow ? "in " : "out of ") + timeMode + (inSb ? " +SB" : "") + (inMac ? " +MACRO" : "") + (newsBlk ? " +NEWS-HALT" : newsOn and newsBad > 0 ? " +NEWS?" : ""), text_color=newsBlk ? color.orange : inWindow ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 5 : 9, "Ready", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 5 : 9, can_signal ? "YES" : newsBlk ? "NEWS-HALT" : "Cooldown", text_color=can_signal ? green : color.orange, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 10, "Open range", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 10, not useOR ? "off" : na(orHi) ? "building" : str.tostring(orHi, format.mintick) + " / " + str.tostring(orLo, format.mintick) + (orHiTaken ? " H taken" : "") + (orLoTaken ? " L taken" : ""), text_color=useOR and (orHiTaken or orLoTaken) ? green : color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 11, "Score parts", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 11, "liq fvg htf ob" + (scDisp ? " disp" : "") + (scPrem ? " prem" : "") + (scBody ? " body" : "") + (scIfvg and ifvgMode != "Off" ? " ifvg" : "") + (scKzl ? kzlOn ? " kzl" : " kzl-off" : "") + (scSmt ? na(sibHi) ? " SMT-NODATA" : " smt" : ""), text_color=color.white, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 12, "iFVG tap", text_color=color.gray, text_size=size.tiny)
 
-    table.cell(dash, 0, 13, "4H CRT", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 13, crtStateTxt + (crtOn and crtReady ? " | ref " + str.tostring(crtHi, format.mintick) + " / " + str.tostring(crtLo, format.mintick) + " | open " + str.tostring(crtOp, format.mintick) : ""), text_color=crtState == 4 ? green : crtState == 5 or crtState == 6 ? red : crtState == 2 or crtState == 3 ? color.yellow : crtStandAside and crtOn ? color.orange : color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 14, "CRT why", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 14, (crtNote == "" ? "no change this bar" : crtNote) + (crtPerf == "" ? "" : "\n" + crtPerf) + (crtFri == "Mark only" and isNfpFri ? "\nfirst Friday (NFP day) - marked, not blocked" : "") + (crtSkips > 0 ? "\n" + str.tostring(crtSkips) + " day(s) stood aside" : "") + (crtFiltered > 0 ? " / " + str.tostring(crtFiltered) + " raids filtered out" : ""), text_color=color.white, text_size=size.tiny)
-    table.cell(dash, 1, 12, ifvgMode == "Off" or ifvgMode == "Track only" ? "no entries" : ifvg_bull ? "LONG " + str.tostring(iv_entry, format.mintick) : ifvg_bear ? "SHORT " + str.tostring(iv_entry, format.mintick) : "none this bar", text_color=ifvg_bull or ifvg_bear ? green : color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 15, "KZL levels", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 15, not kzlOn ? "layer off" : str.tostring(array.size(kzY)) + " live / " + str.tostring(kzlSeen) + " made / " + str.tostring(kzlRaid) + " raided / " + str.tostring(kzlTake) + " taken" + (kzlBadWin > 0 ? " / !" + str.tostring(kzlBadWin) + " window refused" : ""), text_color=kzlBadWin > 0 ? color.orange : kzlRaid > 0 or kzlTake > 0 ? green : color.gray, text_size=size.tiny)
-    table.cell(dash, 0, 16, "KZL last", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 16, not kzlOn ? "layer off" : kzlLast == "" ? "no level tested yet" : kzlLast, text_color=color.white, text_size=size.tiny)
-    table.cell(dash, 0, 17, "BEST record", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 17, not journalOn ? "journal off" : str.tostring(jW) + "W/" + str.tostring(jL) + "L/" + str.tostring(jExp) + "xp/" + str.tostring(array.size(jDir)) + " open | " + str.tostring(jNetR, "#.#") + "R" + (jW + jL > 0 ? " | " + str.tostring(100.0 * jW / (jW + jL), "#") + "%" : ""), text_color=jNetR > 0 ? green : jNetR < 0 ? red : color.white, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 6 : 13, "4H CRT", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 6 : 13, crtStateTxt + (crtOn and crtReady ? " | ref " + str.tostring(crtHi, format.mintick) + " / " + str.tostring(crtLo, format.mintick) + " | open " + str.tostring(crtOp, format.mintick) : ""), text_color=crtState == 4 ? green : crtState == 5 or crtState == 6 ? red : crtState == 2 or crtState == 3 ? color.yellow : crtStandAside and crtOn ? color.orange : color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 0, 14, "CRT why", text_color=color.gray, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 14, (crtNote == "" ? "no change this bar" : crtNote) + (crtPerf == "" ? "" : "\n" + crtPerf) + (crtFri == "Mark only" and isNfpFri ? "\nfirst Friday (NFP day) - marked, not blocked" : "") + (crtSkips > 0 ? "\n" + str.tostring(crtSkips) + " day(s) stood aside" : "") + (crtFiltered > 0 ? " / " + str.tostring(crtFiltered) + " raids filtered out" : ""), text_color=color.white, text_size=size.tiny)
+    if not dashCompact
+        table.cell(dash, 1, 12, ifvgMode == "Off" or ifvgMode == "Track only" ? "no entries" : ifvg_bull ? "LONG " + str.tostring(iv_entry, format.mintick) : ifvg_bear ? "SHORT " + str.tostring(iv_entry, format.mintick) : "none this bar", text_color=ifvg_bull or ifvg_bear ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 7 : 15, "KZL levels", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 7 : 15, not kzlOn ? "layer off" : str.tostring(array.size(kzY)) + " live / " + str.tostring(kzlSeen) + " made / " + str.tostring(kzlRaid) + " raided / " + str.tostring(kzlTake) + " taken" + (kzlBadWin > 0 ? " / !" + str.tostring(kzlBadWin) + " window refused" : ""), text_color=kzlBadWin > 0 ? color.orange : kzlRaid > 0 or kzlTake > 0 ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 8 : 16, "KZL last", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 8 : 16, not kzlOn ? "layer off" : kzlLast == "" ? "no level tested yet" : kzlLast, text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, dashCompact ? 9 : 17, "BEST record", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, dashCompact ? 9 : 17, not journalOn ? "journal off" : str.tostring(jW) + "W/" + str.tostring(jL) + "L/" + str.tostring(jExp) + "xp/" + str.tostring(array.size(jDir)) + " open | " + str.tostring(jNetR, "#.#") + "R" + (jW + jL > 0 ? " | " + str.tostring(100.0 * jW / (jW + jL), "#") + "%" : ""), text_color=jNetR > 0 ? green : jNetR < 0 ? red : color.white, text_size=size.tiny)
 
 alertcondition(best_bear, "BEST Bearish CISD", "BEST Bearish CISD")
 alertcondition(best_bull, "BEST Bullish CISD", "BEST Bullish CISD")

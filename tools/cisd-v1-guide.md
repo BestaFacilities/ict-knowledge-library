@@ -43,6 +43,9 @@ defaults to "wrong" is a trap; everything that adds *behaviour* is opt-in:
 | per-side zone cooldown (was: one shared 3-bar counter) | `Bars between new zones (per side)` | 1 |
 | painted-candle overlay | `Overlay painted candles in the trend colour` | on |
 | session extremes and the prior day's bounds as raidable levels | `Track each session's high and low as a level` | off - §8 |
+| swing pool lines, pivot dots and sweep arrows | `Show swing liquidity lines` / `Show swing dots and sweep arrows` | **off — defaults changed 2026-10-13, look only** - §10 |
+| taken levels deleted instead of kept as stubs; prior-day levels dimmed | `Keep taken levels drawn` / `Dim levels from prior days` | on / **on** - §10 |
+| dashboard in ten rows instead of eighteen | `Compact dashboard` | off - §10 |
 | which sessions are pooled, and whether PDH/PDL join them | five per-session booleans + `Add the prior day's high and low` | Asia / London / NY AM on, London close / NY PM off, PDH/PDL on |
 | how a level dies, and how long it waits | `A level is taken when` / `Projection` | `Close through` / `Until taken` |
 | colours, names, session windows, label text and placement, line style, shade strength, dashboard corner | `Killzone levels: colours, names, windows` group + `Dashboard position` | every default is the behaviour of the build before it, except the shade transparency (35 → 88, look only) - §8 |
@@ -253,7 +256,7 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    nothing happened".
 3. **Paste and add.** Chart → bottom panel → Pine Editor → New Script → replace everything → Save As
    `CISD Ultimate Balanced` → Add to chart.
-4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-context`**.
+4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-declutter`**.
    The tag is bumped whenever the file changes, so this step is a fact and not a guess; if the legend shows the old string you are looking at
    the old compile, and nothing you conclude from that chart is about this file.
 5. **Choose the chart.** `EURUSD` or `GBPUSD`, 5m or 15m, is what everything here is tuned and verified for.
@@ -446,3 +449,25 @@ construction.
 The full MNQ settings profile that turns most of this on is `tools/settings-by-pair.md` §5 — written for
 MNQ on 1m/5m/15m, full day, CISD primary with the CRT layer armed, and maintained under the same rule as
 every other input change.
+
+## 10. The declutter round — added 2026-10-13, fourth build of the day
+
+The context round worked, and the screenshot that proved it (MNQ1! 3m, the full MNQ profile applied) was
+unreadable: ~140 killzone levels made, double-digit live lines running edge to edge, two full-height
+session bands, the v1 swing-line lattice, FVG/OB/iFVG boxes, pivot dots, and an 18-row dashboard over the
+recent bars. Four of those five were this file's own defaults or this guide's own recommendations, so the
+fix is in the file, not in a sterner settings sheet:
+
+| piece | switch | default | note |
+|---|---|---|---|
+| swing liquidity lines | `Show swing liquidity lines` | **off — changed** | the pools are tracked, swept and retired exactly as before; only the painting stops. Up to 40 lines a side plus the spent list was most of the ink. Look-only change, called out like the shade transparency in §8 |
+| swing dots + sweep arrows | `Show swing dots and sweep arrows` | **off — changed** | the sweeps still latch, score and alert; the glyphs go |
+| taken killzone levels | `Keep taken levels drawn` | on | off deletes the line and label on the take bar. The *count* is kept either way — on a multi-day chart the dotted stubs were a rug, not a record |
+| prior-day killzone levels | `Dim levels from prior days` | **on** | a live level born before today is repainted once at 68 transparency. Yesterday's un-raided Asia high is still the draw; it stops shouting at today's volume |
+| compact dashboard | `Compact dashboard` | off | 10 rows: header, Score, Prem/Disc, HTF Bias, Window, Ready, 4H CRT, KZL levels, KZL last, BEST record. The hidden rows still compute and alert. `CRT why` is the one real loss — switch it off on CRT-debugging days |
+
+And the settings sheet corrected itself (`settings-by-pair.md` §5): `Live levels kept` is back to **12**
+(the 20 this round's predecessor recommended is what filled the chart), the session shade is **off** in the
+MNQ profile (the bands paint every historical day; the levels carry the same information), and the compact
+dashboard is on. Nothing here touches a signal: score, gates, raids, journal and alerts are bit-for-bit
+the §9 build, which the gate's unchanged default counters are there to prove.

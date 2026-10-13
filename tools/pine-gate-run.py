@@ -94,7 +94,8 @@ PROBES = {
                                     'plot(eqTaken, "eqTaken")', 'plot(array.size(eqY), "eqPools")',
                                     'plot(smtBullCt, "smtBull")', 'plot(smtBearCt, "smtBear")',
                                     'plot(newsBlkCt, "newsBlk")', 'plot(newsBad, "newsBad")',
-                                    'plot(openSets, "openSets")', 'plot(kzlRaidBarHi, "kzlRaidHi")'],
+                                    'plot(openSets, "openSets")', 'plot(kzlRaidBarHi, "kzlRaidHi")',
+                                    'plot(kzlDimCt, "kzlDim")'],
 }
 
 
@@ -333,6 +334,21 @@ EXERCISES = {
          # way, so a self-sibling confirms every new high and the bearish latch has nothing to catch.
          # Requiring it would be requiring the data to be a different shape, not the code to work.
          ["kzlSeen", "newsBlk", "openSets", "eqMade", "smtBull"]),
+        # The declutter round: same alternating clock as the killzone exercises. Taken levels are
+        # DELETED on the take bar (kzlDrawTaken off) - which kzlTake already proves executes - and
+        # prior-day levels are dimmed exactly once, which only kzlDimCt can prove: kzDayN rolls when
+        # the substituted clock wraps from 750 back to 150, so day-0 levels still live must dim on
+        # day 1. The compact dashboard and the (default-off) swing-line switch change no counter;
+        # they are carried here so the table-renumbering code runs in both shapes somewhere.
+        ("declutter: taken deleted, old levels dimmed, compact panel",
+         [('kzlOn         = input.bool(false,', 'kzlOn         = input.bool(true,'),
+          ('kzlMinBars    = input.int(6,', 'kzlMinBars    = input.int(1,'),
+          ('sweepStrict = input.bool(true,', 'sweepStrict = input.bool(false,'),
+          ('int nyMin = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")',
+           'int nyMin = 150 + (bar_index % 2) * 600'),
+          ('kzlDrawTaken  = input.bool(true,', 'kzlDrawTaken  = input.bool(false,'),
+          ('dashCompact           = input.bool(false,', 'dashCompact           = input.bool(true,')],
+         ["kzlSeen", "kzlTake", "kzlDim"]),
     ],
 }
 
