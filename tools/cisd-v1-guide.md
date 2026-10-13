@@ -242,8 +242,8 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    nothing happened".
 3. **Paste and add.** Chart → bottom panel → Pine Editor → New Script → replace everything → Save As
    `CISD Ultimate Balanced` → Add to chart.
-4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build tf-adaptive 2026-10-10`**.
-   The tag exists so this step is a fact and not a guess; if the legend shows the old string you are looking at
+4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-12-refine`**.
+   The tag is bumped whenever the file changes, so this step is a fact and not a guess; if the legend shows the old string you are looking at
    the old compile, and nothing you conclude from that chart is about this file.
 5. **Choose the chart.** `EURUSD` or `GBPUSD`, 5m or 15m, is what everything here is tuned and verified for.
    Time-based chart types only: on Renko / Range / Line Break / Kagi there is no bar duration, so the auto

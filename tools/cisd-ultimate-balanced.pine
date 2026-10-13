@@ -1,5 +1,5 @@
 //@version=6
-indicator("CISD Ultimate Balanced · build tf-adaptive 2026-10-10", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
+indicator("CISD Ultimate Balanced · build 2026-10-12-refine", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
 
 // ═══════════════════════════════════════════════════════════════════
 // PRESET SYSTEM
