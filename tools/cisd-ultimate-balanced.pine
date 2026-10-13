@@ -1,5 +1,5 @@
 //@version=6
-indicator("CISD Ultimate Balanced · build 2026-10-13-kzlcust", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
+indicator("CISD Ultimate Balanced · build 2026-10-13-context", "CISD Ult", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80, behind_chart = false)
 
 // ═══════════════════════════════════════════════════════════════════
 // PRESET SYSTEM
@@ -26,6 +26,7 @@ require_liq_sweep   = input.bool(false, "Require Liquidity Sweep", group=grp_con
 require_fvg         = input.bool(false, "Require FVG / iFVG", group=grp_conf)
 require_strong_disp = input.bool(false, "Require Strong Displacement", group=grp_conf)
 require_htf_bias    = input.bool(false, "Require HTF Bias Alignment", group=grp_conf)
+require_kzl_sweep   = input.bool(false, "Require a raided killzone level", group=grp_conf, tooltip="Gate: a BEST signal also needs a killzone level raided and rejected within the liquidity lookback - a high raided for shorts, a low for longs. Needs the killzone level layer on; with it off this gate can never pass, which the panel's Score parts row shows as kzl-off rather than letting it fail silently in your head.")
 htf_tf              = input.timeframe("60", "HTF for Bias", group=grp_conf, tooltip="The one timeframe-dependent setting this script will NOT derive for you, and the reason is a hard limit rather than a choice: the timeframe argument of request.security has to be a constant or an input, and the value a chart-aware version would need (derived from timeframe.in_seconds()) is a computed string. A computed string may compile on TradingView, but neither checker here is the editor, and the failure mode of being wrong is that the whole script refuses to paste. So: 60 for 1m-5m charts, 240 for 15m, 480 for 30m, D for anything 1H and above - see tools/settings-by-pair.md.")
 strong_disp_mult    = input.float(0.78, "Strong Displacement Threshold", minval=0.5, maxval=1.0, step=0.05, group=grp_conf)
 
@@ -40,6 +41,7 @@ grp_q = "======= Quality & Risk ======="
 min_score_inp       = input.int(2, "Minimum Score for BEST", minval=1, maxval=5, group=grp_q)
 show_risk_levels    = input.bool(true, "Show Entry / SL / TP", group=grp_q)
 show_liquidity_tgt  = input.bool(true, "Show Auto Liquidity Target", group=grp_q)
+tgtMode      = input.string("Fixed priority", "Auto target selection", options=["Fixed priority", "Nearest pool"], group=grp_q, tooltip="Fixed priority is the shipped behaviour: PDH/PDL first, then the Asia extreme, then London, then the 18-bar swing - by rank, never by distance, so a far PDH outranks a near Asia high. Nearest pool ranks every live pool by distance in the trade direction (prior day, session extremes, un-raided killzone levels, equal highs/lows, the swing) and aims at the closest one, which is what 'draw on liquidity' means on a chart. It changes the drawn target line only; entry, stop and the R target are untouched.")
 tgtPrior     = input.bool(true, "Target the finished session's extreme, not the one still printing", group=grp_q, tooltip="ON by default, one toggle from off, and it does move the drawn target: the session accumulators include the current bar, so with the live reading a long taken inside the Asian session can be aimed at this bar's own high. Prior-session values are latched when a session ends, so the first session of a chart still falls back to the live one.")
 rr_target           = input.float(2.0, "Risk:Reward Target", minval=1.0, step=0.1, group=grp_q)
 atr_mult_sl_inp     = input.float(0.35, "SL Buffer (ATR)", minval=0.1, step=0.05, group=grp_q)
@@ -135,6 +137,31 @@ scDisp  = input.bool(true, "Count displacement in the score", group=grp_sc, tool
 scPrem  = input.bool(false, "Count premium / discount in the score", group=grp_sc, tooltip="It was computed and then left out of the score, so it could only ever veto and never reward.")
 scBody  = input.bool(false, "Count strong body % in the score", group=grp_sc)
 scIfvg  = input.bool(true, "Count a live inverted zone on this side in the score", group=grp_sc, tooltip="Only applies when the iFVG layer is Track + score or stronger.")
+scKzl   = input.bool(false, "Count a raided killzone level in the score", group=grp_sc, tooltip="One point when a killzone session extreme (or PDH/PDL) was raided and rejected within the liquidity lookback, on the trade's side: high raided scores shorts, low raided scores longs. Needs the level layer on. Off by default - it is a second model's fact entering this model's grade, same reasoning as scCrt.")
+scSmt   = input.bool(false, "Count SMT divergence (sibling) in the score", group=grp_sc, tooltip="One point when, at a sweep, the sibling symbol failed to confirm: we took out a low and it did not take out its own (bullish), or we took out a high and it held below its own (bearish). 16-smt-divergence/index-smt.md. The sibling is fetched either way so the panel can say SMT-NODATA instead of silently never firing; blank symbol = the chart's own symbol, which can never diverge from itself.")
+
+grp_jrn = "======= Signal journal (optional) ======="
+journalOn  = input.bool(true, "Journal BEST outcomes (panel row 17)", group=grp_jrn, tooltip="Counting only: every BEST entry is followed until its drawn TP or SL is hit (stop wins a same-bar tie), or it expires. It changes no signal, draws nothing, and exists so a settings change can be compared against trades instead of impressions - the CRT layer has kept this record all along and the CISD core, whose signals you actually take, kept none. On by default because a counter you have to remember to enable starts the day you stop needing it.")
+jrnExpiry  = input.int(240, "Journal: give up after this many bars", minval=10, group=grp_jrn, tooltip="Read as a 5-minute reference and rescaled like every other bar count. An expired trade is counted as expired, at 0R - not quietly dropped, which is how journals learn to lie.")
+
+grp_eq = "======= Equal highs / lows (optional) ======="
+eqOn       = input.bool(false, "Track relative equal highs / lows as pools", group=grp_eq, tooltip="02-liquidity/relative-equal-highs-lows.md: two swing extremes within the tolerance are one pool of resting stops, not two levels. Drawn dashed with a touch count once the second extreme prints; a wick through that closes back is the pool swept, a close through retires it. Pools feed the Nearest pool target. Off by default: another registry on a chart that already has four.")
+eqTolT     = input.int(10, "Equal within this many ticks", minval=0, maxval=200, group=grp_eq, tooltip="10 ticks on MNQ is 2.50 points. 0 demands the same tick twice, which on a futures feed is a coincidence, not a pool.")
+eqMax      = input.int(6, "Pools kept per side", minval=1, maxval=12, group=grp_eq)
+
+grp_news = "======= News blackout (optional) ======="
+newsOn     = input.bool(false, "Suppress BEST around release times", group=grp_news, tooltip="Pine cannot read an economic calendar - 30-news-driven/news-blackout-rules.md is a rule about prints, and all a script can know is the clock. So these are times YOU set for the days that have them; leave it off on a day with nothing scheduled. It gates BEST signals only, and the panel says NEWS-HALT while it is active rather than going quiet.")
+newsT1     = input.string("08:30", "Release time 1 (NY)", group=grp_news, tooltip="HH:MM or HHMM, New York. 08:30 is the CPI / NFP / data slot for index futures. Unreadable text is ignored and counted, never guessed - same parser as the killzone windows.")
+newsT2     = input.string("10:00", "Release time 2 (NY)", group=grp_news, tooltip="10:00 is the second US data slot (ISM, JOLTS, consumer sentiment). Blank disables this one.")
+newsPre    = input.int(15, "Minutes before", minval=0, maxval=120, group=grp_news)
+newsPost   = input.int(15, "Minutes after", minval=0, maxval=120, group=grp_news, tooltip="The print itself is seconds; the 15 after it are spread and slippage, which is what the blackout is actually for.")
+
+grp_smt = "======= SMT sibling (optional) ======="
+smtSym     = input.symbol("CME_MINI:ES1!", "SMT sibling symbol", group=grp_smt, tooltip="For MNQ the sibling is ES. The score point is scSmt in Score composition; this group only says where the second series comes from. If your plan has no data for it, the panel's Score parts row says SMT-NODATA and the point simply never scores - it does not guess.")
+smtLook    = input.int(20, "SMT swing window (bars)", minval=5, maxval=60, group=grp_smt, tooltip="The sibling must fail against its own extremes of this many bars at the bar we sweep one of ours. Read on the chart timeframe, deliberately not rescaled: it is a swing window, not a duration.")
+
+grp_open = "======= Session opens (optional) ======="
+openOn     = input.bool(false, "Draw the true-day and 09:30 opens", group=grp_open, tooltip="The 00:00 New York open (the true day open of the IPDA day) and the 09:30 cash open, as dotted lines from the bar that prints them. Reference only: nothing scores, gates or targets off these unless a later build is asked to. Off by default because the chart already carries PDH/PDL and five sessions of levels.")
 
 green = input.color(#00ffbb, "Bullish", group="Appearance")
 red   = input.color(#ff1100, "Bearish", group="Appearance")
@@ -261,6 +288,7 @@ int pdWin       = tfScaled ? math.max(8, math.round(25 * tfScale)) : 25
 // The order-block spacer was the last unscaled bar count in the file: six bars meant half an hour on 5m
 // and six hours on 1H, which is why the zones stop appearing at all on coarse charts.
 int obSpacing   = tfScaled ? f_sc(6) : 6
+int jrnExpiryS  = tfScaled ? f_sc(jrnExpiry) : jrnExpiry
 
 // ═══════════════════════════════════════════════════════════════════
 // KEY LEVELS
@@ -419,6 +447,151 @@ while array.size(spentLo) > spentMax
     line.delete(array.shift(spentLo))
 while array.size(swinglows) > 40
     line.delete(array.pop(swinglows))
+
+// ═══════════════════════════════════════════════════════════════════
+// EQUAL HIGHS / LOWS - relative-equal extremes are one pool, not two levels
+// ═══════════════════════════════════════════════════════════════════
+// The swing loops above treat every pivot as its own line. 02-liquidity/relative-equal-highs-lows.md
+// is about the opposite case: extremes that land within a tolerance of each other are where the stops
+// cluster, so the pool is drawn once, at the average, with its touch count - and it is the pool, not
+// either print, that a sweep takes. State: 0 = resting, 1 = swept (wicked, closed back), and a close
+// through deletes it. A single pivot is a candidate, not a pool: it is only drawn, counted and offered
+// as a target from its second touch, and a candidate that never gets one expires with the swings.
+var float[] eqY   = array.new_float()
+var int[]   eqDir = array.new_int()
+var int[]   eqN   = array.new_int()
+var int[]   eqSt  = array.new_int()
+var int[]   eqBar = array.new_int()
+var line[]  eqLn  = array.new_line()
+var label[] eqLb  = array.new_label()
+var int eqMade  = 0
+var int eqSwept = 0
+var int eqTaken = 0
+if eqOn and not na(pivhigh)
+    float p = high[len]
+    int pb = bar_index - len
+    float tol = eqTolT * syminfo.mintick
+    int found = -1
+    if array.size(eqY) > 0
+        for j = 0 to array.size(eqY) - 1
+            if j < 0 or j >= array.size(eqY)
+                continue
+            if array.get(eqDir, j) == 1 and array.get(eqSt, j) == 0 and math.abs(p - array.get(eqY, j)) <= tol
+                found := j
+                break
+    if found >= 0
+        int n2 = array.get(eqN, found) + 1
+        float y2 = (array.get(eqY, found) * (n2 - 1) + p) / n2
+        array.set(eqN, found, n2)
+        array.set(eqY, found, y2)
+        line el = array.get(eqLn, found)
+        label eb = array.get(eqLb, found)
+        if not na(el)
+            line.set_y1(el, y2)
+            line.set_y2(el, y2)
+            if n2 == 2
+                line.set_color(el, color.new(color.orange, 35))
+        if not na(eb)
+            label.set_y(eb, y2)
+            if n2 >= 2
+                label.set_text(eb, "EQH x" + str.tostring(n2))
+        if n2 == 2
+            eqMade += 1
+    else
+        int sideN = 0
+        if array.size(eqY) > 0
+            for j = 0 to array.size(eqY) - 1
+                if j < 0 or j >= array.size(eqY)
+                    continue
+                if array.get(eqDir, j) == 1
+                    sideN += 1
+        if sideN < eqMax
+            array.push(eqY, p)
+            array.push(eqDir, 1)
+            array.push(eqN, 1)
+            array.push(eqSt, 0)
+            array.push(eqBar, bar_index)
+            array.push(eqLn, line.new(pb, p, pb, p, extend=extend.right, style=line.style_dashed, color=color.new(color.orange, 100)))
+            array.push(eqLb, label.new(pb, p, "", style=label.style_label_down, color=color.new(color.black, 100), textcolor=color.orange, size=size.tiny))
+if eqOn and not na(pivlow)
+    float p = low[len]
+    int pb = bar_index - len
+    float tol = eqTolT * syminfo.mintick
+    int found = -1
+    if array.size(eqY) > 0
+        for j = 0 to array.size(eqY) - 1
+            if j < 0 or j >= array.size(eqY)
+                continue
+            if array.get(eqDir, j) == -1 and array.get(eqSt, j) == 0 and math.abs(p - array.get(eqY, j)) <= tol
+                found := j
+                break
+    if found >= 0
+        int n2 = array.get(eqN, found) + 1
+        float y2 = (array.get(eqY, found) * (n2 - 1) + p) / n2
+        array.set(eqN, found, n2)
+        array.set(eqY, found, y2)
+        line el = array.get(eqLn, found)
+        label eb = array.get(eqLb, found)
+        if not na(el)
+            line.set_y1(el, y2)
+            line.set_y2(el, y2)
+            if n2 == 2
+                line.set_color(el, color.new(color.teal, 35))
+        if not na(eb)
+            label.set_y(eb, y2)
+            if n2 >= 2
+                label.set_text(eb, "EQL x" + str.tostring(n2))
+        if n2 == 2
+            eqMade += 1
+    else
+        int sideN = 0
+        if array.size(eqY) > 0
+            for j = 0 to array.size(eqY) - 1
+                if j < 0 or j >= array.size(eqY)
+                    continue
+                if array.get(eqDir, j) == -1
+                    sideN += 1
+        if sideN < eqMax
+            array.push(eqY, p)
+            array.push(eqDir, -1)
+            array.push(eqN, 1)
+            array.push(eqSt, 0)
+            array.push(eqBar, bar_index)
+            array.push(eqLn, line.new(pb, p, pb, p, extend=extend.right, style=line.style_dashed, color=color.new(color.teal, 100)))
+            array.push(eqLb, label.new(pb, p, "", style=label.style_label_up, color=color.new(color.black, 100), textcolor=color.teal, size=size.tiny))
+if eqOn and array.size(eqY) > 0
+    for i = array.size(eqY) - 1 to 0
+        if i < 0 or i >= array.size(eqY)
+            continue
+        float y = array.get(eqY, i)
+        int d = array.get(eqDir, i)
+        int st = array.get(eqSt, i)
+        int nn = array.get(eqN, i)
+        bool thru = nn >= 2 and (d > 0 ? close > y : close < y)
+        bool staleEq = nn < 2 and bar_index - array.get(eqBar, i) > expiryBars
+        if thru or staleEq
+            line el = array.get(eqLn, i)
+            label eb = array.get(eqLb, i)
+            if not na(el)
+                line.delete(el)
+            if not na(eb)
+                label.delete(eb)
+            array.remove(eqY, i)
+            array.remove(eqDir, i)
+            array.remove(eqN, i)
+            array.remove(eqSt, i)
+            array.remove(eqBar, i)
+            array.remove(eqLn, i)
+            array.remove(eqLb, i)
+            if thru
+                eqTaken += 1
+        else if st == 0 and nn >= 2 and (d > 0 ? f_sweepHi(y) : f_sweepLo(y))
+            array.set(eqSt, i, 1)
+            eqSwept += 1
+            line el = array.get(eqLn, i)
+            if not na(el)
+                line.set_style(el, line.style_dotted)
+                line.set_color(el, color.new(color.gray, 45))
 
 int bars_since_high = ta.barssince(wicked_high)
 int bars_since_low  = ta.barssince(wicked_low)
@@ -645,6 +818,29 @@ float htf_ema   = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50)[1
 bool htf_bull  = htf_close > htf_ema
 bool htf_bear  = htf_close < htf_ema
 
+// SMT against the sibling (16-smt-divergence/index-smt.md): at the bar we sweep a swing, did the
+// sibling take out its own equivalent extreme? If it did not, the sweep is ours alone, which is the
+// divergence. Swing-window read, not a pivot read, because the sibling's pivots confirm len bars late
+// and the point has to exist on the sweep bar or it scores nothing. Fetched unconditionally so a
+// missing feed is a visible SMT-NODATA on the panel instead of a point that never fires.
+string smtEffSym = smtSym == "" ? syminfo.tickerid : smtSym
+[sibHi, sibLo] = request.security(smtEffSym, "", [high, low])
+float sibHiPrior = ta.highest(sibHi[1], smtLook)
+float sibLoPrior = ta.lowest(sibLo[1], smtLook)
+var int smtBullBar = -1000000
+var int smtBearBar = -1000000
+var int smtBullCt  = 0
+var int smtBearCt  = 0
+if scSmt and not na(sibHi) and not na(sibHiPrior) and not na(sibLoPrior)
+    if wicked_low and sibLo > sibLoPrior
+        smtBullBar := bar_index
+        smtBullCt += 1
+    if wicked_high and sibHi < sibHiPrior
+        smtBearBar := bar_index
+        smtBearCt += 1
+bool smtOkBull = scSmt and bar_index - smtBullBar <= liqLook
+bool smtOkBear = scSmt and bar_index - smtBearBar <= liqLook
+
 // ═════════════════════════════════════
 // TIME ENGINE
 // ═════════════════════════════════════
@@ -712,6 +908,43 @@ bool orOkBull = not orGate or orLoTaken
 bool orOkBear = not orGate or orHiTaken
 
 // ═══════════════════════════════════════════════════════════════════
+// SESSION OPENS - the true-day open and the cash open, as references
+// ═══════════════════════════════════════════════════════════════════
+// Two dotted lines a day, recreated at the bar that prints them. The 00:00 line is the open of the
+// IPDA true day; the 09:30 line is the cash open an index actually gaps from. Nothing reads them -
+// they are on the chart because a level you can see is a level you stop misremembering.
+var float tdO = na
+var float cashO = na
+var line tdLn = na
+var line cashLn = na
+var label tdLb = na
+var label cashLb = na
+var int openSets = 0
+if openOn
+    bool ndO = nz(nyMin[1]) > nyMin
+    if ndO
+        tdO := na
+        cashO := na
+    if nyMin == 0 and na(tdO)
+        tdO := open
+        openSets += 1
+        if not na(tdLn)
+            line.delete(tdLn)
+        if not na(tdLb)
+            label.delete(tdLb)
+        tdLn := line.new(bar_index, tdO, bar_index + 1, tdO, extend=extend.right, color=color.new(color.gray, 25), style=line.style_dotted)
+        tdLb := label.new(bar_index + 1, tdO, "00:00 open", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.gray, size=size.tiny)
+    if nyMin == 570 and na(cashO)
+        cashO := open
+        openSets += 1
+        if not na(cashLn)
+            line.delete(cashLn)
+        if not na(cashLb)
+            label.delete(cashLb)
+        cashLn := line.new(bar_index, cashO, bar_index + 1, cashO, extend=extend.right, color=color.new(color.white, 35), style=line.style_dotted)
+        cashLb := label.new(bar_index + 1, cashO, "09:30 open", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
 // KILLZONE LEVELS - the session extremes, projected until someone takes them
 // ═══════════════════════════════════════════════════════════════════
 // The CISD core answers "was a recent pivot swept"; this answers "was the ASIAN HIGH swept", which is
@@ -719,7 +952,7 @@ bool orOkBear = not orGate or orHiTaken
 // confirmation", and gate 2 of Sham's three is 'key level and candle range? No = stop'). Inventory and
 // the object-budget argument for the shape of this layer: tools/mx-setups-study.md section 8.
 grp_kzl = "======= Killzone levels (optional) ======="
-kzlOn         = input.bool(false, "Track each session's high and low as a level", group=grp_kzl, tooltip="OFF by default, like every added layer. This is the draw-and-count half: it puts the session bounds on the chart as lines that survive their session, marks them raided or taken, and tells you which. Nothing in the CISD score or gate consults it until a later build lets it.")
+kzlOn         = input.bool(false, "Track each session's high and low as a level", group=grp_kzl, tooltip="OFF by default, like every added layer. This is the draw-and-count half: it puts the session bounds on the chart as lines that survive their session, marks them raided or taken, and tells you which. The CISD score and gate consult it only through scKzl and Require a raided killzone level, both off by default.")
 kzl_s_asia    = input.bool(true, "Asia levels", group=grp_kzl, tooltip="On = the 20:00-00:00 NY window becomes a pair of levels when it closes. Which window, what it is called and what it looks like are in the look group below.")
 kzl_s_london  = input.bool(true, "London levels", group=grp_kzl)
 kzl_s_nyam    = input.bool(true, "New York AM levels", group=grp_kzl)
@@ -787,6 +1020,8 @@ var int   kzlSeen = 0
 var int   kzlRaid = 0
 var int   kzlTake = 0
 var string kzlLast = ''
+var int kzlRaidBarHi = -1000000
+var int kzlRaidBarLo = -1000000
 bool kzNewDay = nz(nyMin[1]) > nyMin
 if kzNewDay
     kzDayN += 1
@@ -936,6 +1171,10 @@ if kzlOn and array.size(kzY) > 0
                     line.set_width(l, math.max(2, kzlLineW + 1))
                 kzlRaid += 1
                 kzlEvRaid := true
+                if dir > 0
+                    kzlRaidBarHi := bar_index
+                else
+                    kzlRaidBarLo := bar_index
                 kzlLast := f_kzTag(sid, dir) + ' ' + str.tostring(y, format.mintick) + ' raided, closed back inside'
 while array.size(kzY) > kzlMaxLive
     f_kzDrop(array.size(kzY) - 1)
@@ -1702,6 +1941,25 @@ if array.size(bull_potential) > 0
             inloop := false
 
 // ═══════════════════════════════════════════════════════════════════
+// NEWS BLACKOUT - clock-based, because Pine has no calendar
+// ═══════════════════════════════════════════════════════════════════
+// Parsed with the killzone window parser, so an unreadable time is refused and counted the same way
+// in both places. It gates BEST only (can_signal), and the panel says NEWS-HALT while it runs.
+var int newsM1 = -1
+var int newsM2 = -1
+var int newsBad = 0
+var int newsBlkCt = 0
+if barstate.isfirst
+    newsM1 := nz(f_kzMins(newsT1), -1)
+    newsM2 := nz(f_kzMins(newsT2), -1)
+    newsBad := (newsM1 < 0 and str.trim(newsT1) != "" ? 1 : 0) + (newsM2 < 0 and str.trim(newsT2) != "" ? 1 : 0)
+f_newsWin(int m) =>
+    m >= 0 and nyMin >= m - newsPre and nyMin < m + newsPost
+bool newsBlk = newsOn and (f_newsWin(newsM1) or f_newsWin(newsM2))
+if newsBlk
+    newsBlkCt += 1
+
+// ═══════════════════════════════════════════════════════════════════
 // BEST SIGNAL + SMART TARGETS + ALERTS
 // ═══════════════════════════════════════════════════════════════════
 var int trend = 0
@@ -1718,6 +1976,22 @@ var float[]  active_origins      = array.new_float()
 var int[]    active_dirs         = array.new_int()
 var int[]    active_bars         = array.new_int()
 
+var int[]   jDir = array.new_int()
+var float[] jEnt = array.new_float()
+var float[] jSl  = array.new_float()
+var float[] jTp  = array.new_float()
+var int[]   jBar = array.new_int()
+var int   jW = 0
+var int   jL = 0
+var int   jExp = 0
+var float jNetR = 0.0
+f_jDrop(int i) =>
+    array.remove(jDir, i)
+    array.remove(jEnt, i)
+    array.remove(jSl, i)
+    array.remove(jTp, i)
+    array.remove(jBar, i)
+
 bool bearish_sweep = false
 bool bullish_sweep = false
 bool best_bear = false
@@ -1725,7 +1999,7 @@ bool best_bull = false
 int score = 0
 string grade = ""
 
-bool can_signal = bar_index - last_signal_bar >= signal_cooldown and inWindow and clockOk
+bool can_signal = bar_index - last_signal_bar >= signal_cooldown and inWindow and clockOk and not newsBlk
 float body_pct = math.abs(close - open) / math.max(high - low, syminfo.mintick)
 
 // hoisted: a ta.* call inside an if/else only updates on the bars that take that
@@ -1740,7 +2014,65 @@ get_liq_target(bool is_bull) =>
     float aLo = tgtPrior ? nz(asiaLoPrior, asiaLow)  : asiaLow
     float lHi = tgtPrior ? nz(lonHiPrior, lonHigh)   : lonHigh
     float lLo = tgtPrior ? nz(lonLoPrior, lonLow)    : lonLow
-    if is_bull
+    if tgtMode == "Nearest pool"
+        float[] cand = array.new_float()
+        string[] cnm = array.new_string()
+        if is_bull
+            if not na(pd_high) and pd_high > close
+                array.push(cand, pd_high)
+                array.push(cnm, "PDH")
+            if not na(aHi) and aHi > close
+                array.push(cand, aHi)
+                array.push(cnm, "Asia H")
+            if not na(lHi) and lHi > close
+                array.push(cand, lHi)
+                array.push(cnm, "Lon H")
+            if not na(liqHi18) and liqHi18 > close
+                array.push(cand, liqHi18)
+                array.push(cnm, "Swing H")
+        else
+            if not na(pd_low) and pd_low < close
+                array.push(cand, pd_low)
+                array.push(cnm, "PDL")
+            if not na(aLo) and aLo < close
+                array.push(cand, aLo)
+                array.push(cnm, "Asia L")
+            if not na(lLo) and lLo < close
+                array.push(cand, lLo)
+                array.push(cnm, "Lon L")
+            if not na(liqLo18) and liqLo18 < close
+                array.push(cand, liqLo18)
+                array.push(cnm, "Swing L")
+        if kzlOn and array.size(kzY) > 0
+            for i = 0 to array.size(kzY) - 1
+                if i < 0 or i >= array.size(kzY)
+                    continue
+                float y = array.get(kzY, i)
+                int d = array.get(kzDir, i)
+                int st = array.get(kzSt, i)
+                if st != 2 and (is_bull ? d > 0 and y > close : d < 0 and y < close)
+                    array.push(cand, y)
+                    array.push(cnm, f_kzTag(array.get(kzSid, i), d))
+        if eqOn and array.size(eqY) > 0
+            for i = 0 to array.size(eqY) - 1
+                if i < 0 or i >= array.size(eqY)
+                    continue
+                float y = array.get(eqY, i)
+                int d = array.get(eqDir, i)
+                if array.get(eqSt, i) == 0 and array.get(eqN, i) >= 2 and (is_bull ? d > 0 and y > close : d < 0 and y < close)
+                    array.push(cand, y)
+                    array.push(cnm, d > 0 ? "EQH" : "EQL")
+        if array.size(cand) > 0
+            int bi = 0
+            for i = 1 to array.size(cand) - 1
+                if i < 0 or i >= array.size(cand)
+                    continue
+                if is_bull ? array.get(cand, i) < array.get(cand, bi) : array.get(cand, i) > array.get(cand, bi)
+                    bi := i
+            target := array.get(cand, bi)
+            name := array.get(cnm, bi)
+        [target, name]
+    else if is_bull
         if not na(pd_high) and pd_high > close
             target := pd_high
             name := "PDH"
@@ -1778,20 +2110,21 @@ if cisd == 1 and can_signal
     bool ob_ok   = not na(last_bear_ob_bar) and bar_index - last_bear_ob_bar <= obFresh and close <= last_bear_ob_high
     bool pd_ok   = in_premium
     bool body_ok = body_pct >= body_pct_min
+    bool kzl_ok  = kzlOn and bar_index - kzlRaidBarHi <= liqLook
 
     // One point, for the ALIGNED direction only. This read `+ (scCrt and crtOkBull) + (scCrt and
     // crtOkBear)` on the bear side, so a bearish signal was rewarded for an armed bullish reference
     // range - the one condition every source in the corpus calls the largest win-rate killer - and the
     // bull side had no reference term at all while still being graded against the same 4-point base.
-    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0)
-    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBear ? 1 : 0)
+    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0) + (scKzl and kzlOn ? 1 : 0) + (scSmt ? 1 : 0)
+    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBear ? 1 : 0) + (scKzl and kzl_ok ? 1 : 0) + (scSmt and smtOkBear ? 1 : 0)
     float sFrac = sMax > 0 ? 1.0 * score / sMax : 0.0
     grade := sFrac >= 0.999 ? "A+" : sFrac >= 0.80 ? "A" : sFrac >= 0.60 ? "B" : "C"
 
     if liq_ok
         bearish_sweep := true
 
-    bool filters_ok = (not require_liq_sweep or liq_ok) and (not require_fvg or fvg_ok) and (not require_strong_disp or disp_ok) and (not require_htf_bias or htf_ok) and (not require_ob or ob_ok) and (not require_prem_disc or pd_ok) and (not require_body_pct or body_ok) and (not require_ifvg or ifvg_ok) and (ifvgMode != "Track + score + gate" or ifvg_ok) and orOkBear and (not crtGateCore or crtOkBear)
+    bool filters_ok = (not require_liq_sweep or liq_ok) and (not require_fvg or fvg_ok) and (not require_strong_disp or disp_ok) and (not require_htf_bias or htf_ok) and (not require_ob or ob_ok) and (not require_prem_disc or pd_ok) and (not require_body_pct or body_ok) and (not require_ifvg or ifvg_ok) and (ifvgMode != "Track + score + gate" or ifvg_ok) and orOkBear and (not crtGateCore or crtOkBear) and (not require_kzl_sweep or kzl_ok)
     best_bear := filters_ok and score >= min_score_for_best
 
     if best_bear
@@ -1810,6 +2143,12 @@ if cisd == 1 and can_signal
         float b_entry = close
         float b_sl = high + atr * atr_mult_sl
         float b_tp = b_entry - (b_sl - b_entry) * rr_target
+        if journalOn
+            array.push(jDir, -1)
+            array.push(jEnt, b_entry)
+            array.push(jSl, b_sl)
+            array.push(jTp, b_tp)
+            array.push(jBar, bar_index)
         if show_risk_levels
             float entry = b_entry
             float sl = b_sl
@@ -1838,16 +2177,17 @@ if cisd == 2 and can_signal
     bool ob_ok   = not na(last_bull_ob_bar) and bar_index - last_bull_ob_bar <= obFresh and close >= last_bull_ob_low
     bool pd_ok   = in_discount
     bool body_ok = body_pct >= body_pct_min
+    bool kzl_ok  = kzlOn and bar_index - kzlRaidBarLo <= liqLook
 
-    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0)
-    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBull ? 1 : 0)
+    int sMax = 4 + (scDisp ? 1 : 0) + (scPrem ? 1 : 0) + (scBody ? 1 : 0) + (scIfvg and ifvgMode != "Off" ? 1 : 0) + (scCrt ? 1 : 0) + (scKzl and kzlOn ? 1 : 0) + (scSmt ? 1 : 0)
+    score := (liq_ok ? 1 : 0) + (fvg_ok ? 1 : 0) + (scDisp and disp_ok ? 1 : 0) + (htf_ok ? 1 : 0) + (ob_ok ? 1 : 0) + (scPrem and pd_ok ? 1 : 0) + (scBody and body_ok ? 1 : 0) + (scIfvg and ifvgMode != "Off" and ifvg_ok ? 1 : 0) + (scCrt and crtOkBull ? 1 : 0) + (scKzl and kzl_ok ? 1 : 0) + (scSmt and smtOkBull ? 1 : 0)
     float sFrac = sMax > 0 ? 1.0 * score / sMax : 0.0
     grade := sFrac >= 0.999 ? "A+" : sFrac >= 0.80 ? "A" : sFrac >= 0.60 ? "B" : "C"
 
     if liq_ok
         bullish_sweep := true
 
-    bool filters_ok = (not require_liq_sweep or liq_ok) and (not require_fvg or fvg_ok) and (not require_strong_disp or disp_ok) and (not require_htf_bias or htf_ok) and (not require_ob or ob_ok) and (not require_prem_disc or pd_ok) and (not require_body_pct or body_ok) and (not require_ifvg or ifvg_ok) and (ifvgMode != "Track + score + gate" or ifvg_ok) and orOkBull and (not crtGateCore or crtOkBull)
+    bool filters_ok = (not require_liq_sweep or liq_ok) and (not require_fvg or fvg_ok) and (not require_strong_disp or disp_ok) and (not require_htf_bias or htf_ok) and (not require_ob or ob_ok) and (not require_prem_disc or pd_ok) and (not require_body_pct or body_ok) and (not require_ifvg or ifvg_ok) and (ifvgMode != "Track + score + gate" or ifvg_ok) and orOkBull and (not crtGateCore or crtOkBull) and (not require_kzl_sweep or kzl_ok)
     best_bull := filters_ok and score >= min_score_for_best
 
     if best_bull
@@ -1866,6 +2206,12 @@ if cisd == 2 and can_signal
         float b_entry = close
         float b_sl = low - atr * atr_mult_sl
         float b_tp = b_entry + (b_entry - b_sl) * rr_target
+        if journalOn
+            array.push(jDir, 1)
+            array.push(jEnt, b_entry)
+            array.push(jSl, b_sl)
+            array.push(jTp, b_tp)
+            array.push(jBar, bar_index)
         if show_risk_levels
             float entry = b_entry
             float sl = b_sl
@@ -1883,6 +2229,29 @@ if cisd == 2 and can_signal
                 array.push(active_liq_labels, liq_lbl)
 
         alert("BEST BULLISH " + grade + " | score " + str.tostring(score) + "/" + str.tostring(sMax) + " | entry " + str.tostring(b_entry, format.mintick) + " | SL " + str.tostring(b_sl, format.mintick) + " | TP " + str.tostring(b_tp, format.mintick) + " | body " + str.tostring(body_pct * 100, "#") + "% |" + winTag + " " + tier + " " + syminfo.ticker, alert.freq_once_per_bar)
+
+// Journal resolution. Checked from the bar AFTER entry (the entry bar's own range made the signal,
+// so counting it would grade the candle that printed the label). A bar that reaches both lines is a
+// loss: the stop is the one you can prove you were filled at.
+if journalOn and array.size(jDir) > 0
+    for i = array.size(jDir) - 1 to 0
+        if i < 0 or i >= array.size(jDir)
+            continue
+        if bar_index > array.get(jBar, i)
+            int d = array.get(jDir, i)
+            bool slHit = d > 0 ? low <= array.get(jSl, i) : high >= array.get(jSl, i)
+            bool tpHit = d > 0 ? high >= array.get(jTp, i) : low <= array.get(jTp, i)
+            if slHit
+                jL += 1
+                jNetR -= 1.0
+                f_jDrop(i)
+            else if tpHit
+                jW += 1
+                jNetR += rr_target
+                f_jDrop(i)
+            else if bar_index - array.get(jBar, i) > jrnExpiryS
+                jExp += 1
+                f_jDrop(i)
 
 // Clean old signals
 if array.size(active_bars) > 0
@@ -1995,13 +2364,13 @@ if show_dashboard and barstate.islast
     table.cell(dash, 0, 7, "HTF Bias", text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 1, 7, htf_bull ? "Bullish" : "Bearish", text_color=htf_bull ? green : red, text_size=size.tiny)
     table.cell(dash, 0, 8, "Window", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 8, (inWindow ? "in " : "out of ") + timeMode + (inSb ? " +SB" : "") + (inMac ? " +MACRO" : ""), text_color=inWindow ? green : color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 8, (inWindow ? "in " : "out of ") + timeMode + (inSb ? " +SB" : "") + (inMac ? " +MACRO" : "") + (newsBlk ? " +NEWS-HALT" : newsOn and newsBad > 0 ? " +NEWS?" : ""), text_color=newsBlk ? color.orange : inWindow ? green : color.gray, text_size=size.tiny)
     table.cell(dash, 0, 9, "Ready", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 9, can_signal ? "YES" : "Cooldown", text_color=can_signal ? green : color.orange, text_size=size.tiny)
+    table.cell(dash, 1, 9, can_signal ? "YES" : newsBlk ? "NEWS-HALT" : "Cooldown", text_color=can_signal ? green : color.orange, text_size=size.tiny)
     table.cell(dash, 0, 10, "Open range", text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 1, 10, not useOR ? "off" : na(orHi) ? "building" : str.tostring(orHi, format.mintick) + " / " + str.tostring(orLo, format.mintick) + (orHiTaken ? " H taken" : "") + (orLoTaken ? " L taken" : ""), text_color=useOR and (orHiTaken or orLoTaken) ? green : color.gray, text_size=size.tiny)
     table.cell(dash, 0, 11, "Score parts", text_color=color.gray, text_size=size.tiny)
-    table.cell(dash, 1, 11, "liq fvg htf ob" + (scDisp ? " disp" : "") + (scPrem ? " prem" : "") + (scBody ? " body" : "") + (scIfvg and ifvgMode != "Off" ? " ifvg" : ""), text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 1, 11, "liq fvg htf ob" + (scDisp ? " disp" : "") + (scPrem ? " prem" : "") + (scBody ? " body" : "") + (scIfvg and ifvgMode != "Off" ? " ifvg" : "") + (scKzl ? kzlOn ? " kzl" : " kzl-off" : "") + (scSmt ? na(sibHi) ? " SMT-NODATA" : " smt" : ""), text_color=color.white, text_size=size.tiny)
     table.cell(dash, 0, 12, "iFVG tap", text_color=color.gray, text_size=size.tiny)
 
     table.cell(dash, 0, 13, "4H CRT", text_color=color.gray, text_size=size.tiny)
@@ -2013,6 +2382,8 @@ if show_dashboard and barstate.islast
     table.cell(dash, 1, 15, not kzlOn ? "layer off" : str.tostring(array.size(kzY)) + " live / " + str.tostring(kzlSeen) + " made / " + str.tostring(kzlRaid) + " raided / " + str.tostring(kzlTake) + " taken" + (kzlBadWin > 0 ? " / !" + str.tostring(kzlBadWin) + " window refused" : ""), text_color=kzlBadWin > 0 ? color.orange : kzlRaid > 0 or kzlTake > 0 ? green : color.gray, text_size=size.tiny)
     table.cell(dash, 0, 16, "KZL last", text_color=color.gray, text_size=size.tiny)
     table.cell(dash, 1, 16, not kzlOn ? "layer off" : kzlLast == "" ? "no level tested yet" : kzlLast, text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, 17, "BEST record", text_color=color.gray, text_size=size.tiny)
+    table.cell(dash, 1, 17, not journalOn ? "journal off" : str.tostring(jW) + "W/" + str.tostring(jL) + "L/" + str.tostring(jExp) + "xp/" + str.tostring(array.size(jDir)) + " open | " + str.tostring(jNetR, "#.#") + "R" + (jW + jL > 0 ? " | " + str.tostring(100.0 * jW / (jW + jL), "#") + "%" : ""), text_color=jNetR > 0 ? green : jNetR < 0 ? red : color.white, text_size=size.tiny)
 
 alertcondition(best_bear, "BEST Bearish CISD", "BEST Bearish CISD")
 alertcondition(best_bull, "BEST Bullish CISD", "BEST Bullish CISD")

@@ -24,12 +24,13 @@ from math import floor
 
 REF = {"expiry": 60, "liqLook": 12, "cleanAfter": 35, "ifvgAge": 180,
        "crtObAge": 12, "fvgFresh": 10, "obFresh": 12, "pdWin": 25,
-       "kzlMin": 6}
+       "kzlMin": 6, "jrnExpiry": 240}
 BASE_SEC = 300          # the timeframe the core was tuned on: 5m
 CHARTS = [("1m", 60), ("3m", 180), ("5m", 300), ("15m", 900), ("30m", 1800),
           ("60m", 3600), ("4H", 14400), ("1D", 86400)]
 HDR = ["chart", "tier it picks", "scale", "expiry", "liq look", "clean after", "iFVG age",
-       "CRT / OB age", "FVG / OB fresh", "prem-disc", "KZL session min", "expiry as time", "clean as time"]
+       "CRT / OB age", "FVG / OB fresh", "prem-disc", "KZL session min", "journal expiry",
+       "expiry as time", "clean as time"]
 
 
 def tier(sec):
@@ -74,7 +75,7 @@ def main():
                 str(f(REF["ifvgAge"], sc)), str(f(REF["crtObAge"], sc)),
                 str(f(REF["fvgFresh"], sc)) + " / " + str(f(REF["obFresh"], sc)),
                str(max(8, f(REF["pdWin"], sc, 8))), str(f(REF["kzlMin"], sc)),
-                hours(e, sec), hours(c, sec)]
+                str(f(REF["jrnExpiry"], sc)), hours(e, sec), hours(c, sec)]
         print("| " + " | ".join(cols) + " |")
 
 

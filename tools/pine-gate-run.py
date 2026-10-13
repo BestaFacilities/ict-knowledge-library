@@ -87,7 +87,14 @@ PROBES = {
                                     'plot(kzlSeen, "kzlSeen")', 'plot(kzlRaid, "kzlRaid")',
                                     'plot(kzlTake, "kzlTake")', 'plot(array.size(kzY), "kzlLv")',
                                     'plot(kzlBadWin, "kzlBadWin")', 'plot(kzlWinCust, "kzlWinCust")',
-                                    'plot(kzlLblTick, "kzlLblTick")'],
+                                    'plot(kzlLblTick, "kzlLblTick")',
+                                    'plot(jW, "jWins")', 'plot(jL, "jLoss")', 'plot(jExp, "jExp")',
+                                    'plot(jNetR, "jNetR")', 'plot(array.size(jDir), "jOpen")',
+                                    'plot(eqMade, "eqMade")', 'plot(eqSwept, "eqSwept")',
+                                    'plot(eqTaken, "eqTaken")', 'plot(array.size(eqY), "eqPools")',
+                                    'plot(smtBullCt, "smtBull")', 'plot(smtBearCt, "smtBear")',
+                                    'plot(newsBlkCt, "newsBlk")', 'plot(newsBad, "newsBad")',
+                                    'plot(openSets, "openSets")', 'plot(kzlRaidBarHi, "kzlRaidHi")'],
 }
 
 
@@ -269,6 +276,63 @@ EXERCISES = {
           ('dashPosIn             = input.string("Top right",',
            'dashPosIn             = input.string("Bottom left",')],
          ["kzlSeen", "kzlWinCust", "kzlBadWin", "kzlLblTick"]),
+        # The context round (KZL score/gate, EQ pools, news blackout, opens, SMT latch, journal,
+        # nearest target) gets one exercise with a three-phase clock - 00:00 / 04:45 / 09:30 - because
+        # that is the only substituted clock that captures BOTH session opens, sits inside London for
+        # the level layer, and lands inside a blackout window set to the middle phase. The sibling is
+        # blanked to the chart's own symbol: pyne has one synthetic symbol, so this proves the SMT
+        # latch executes and counts, and proves nothing about divergence - with one series the sibling
+        # IS us, and any 'divergence' it finds is the pivot-vs-window arithmetic, named here so nobody
+        # reads the counter as evidence. eqTolT goes to its input ceiling for the same unit reason the
+        # CRT tick floor is zeroed above: tolerance is denominated in the synthetic feed's ticks.
+        # jWins/jLoss are probed but deliberately NOT must-fire: whether a BEST entry resolves inside
+        # 1200 synthetic bars is a property of the synthetic trend, not of the journal's bookkeeping;
+        # what this run must prove is that the journal's inputs and the resolution loop execute inside
+        # a live script (jOpen is plotted for the same reason).
+        ("context round: pools, blackout, opens, SMT latch",
+         [('kzlOn         = input.bool(false,', 'kzlOn         = input.bool(true,'),
+          ('kzlMinBars    = input.int(6,', 'kzlMinBars    = input.int(1,'),
+          ('sweepStrict = input.bool(true,', 'sweepStrict = input.bool(false,'),
+          ('int nyMin = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")',
+           'int nyMin = (bar_index % 3) * 285'),
+          ('scKzl   = input.bool(false,', 'scKzl   = input.bool(true,'),
+          ('eqOn       = input.bool(false,', 'eqOn       = input.bool(true,'),
+          ('eqTolT     = input.int(10,', 'eqTolT     = input.int(200,'),
+          ('newsOn     = input.bool(false,', 'newsOn     = input.bool(true,'),
+          ('newsT1     = input.string("08:30",', 'newsT1     = input.string("04:45",'),
+          ('openOn     = input.bool(false,', 'openOn     = input.bool(true,'),
+          ('scSmt   = input.bool(false,', 'scSmt   = input.bool(true,'),
+          ('smtSym     = input.symbol("CME_MINI:ES1!",', 'smtSym     = input.symbol("",'),
+          ('tgtMode      = input.string("Fixed priority",', 'tgtMode      = input.string("Nearest pool",'),
+          # pyne's synthetic bars produce no pivots at all (ta.pivothigh/pivotlow stay na - the same
+          # dead path tools/mx-setups-study.md section 7 records), so the EQ registry would execute
+          # zero times behind a green run. The detector CONDITION is substituted for a periodic one;
+          # the clustering, averaging, drawing, sweep and retirement code that runs behind it is the
+          # shipped code, and the tolerance line goes with it because 'ticks' on the synthetic feed
+          # are not a unit anyone chose. On a real chart the pivot condition stands untouched.
+          ('if eqOn and not na(pivhigh)', 'if eqOn and bar_index % 7 == 5'),
+          ('if eqOn and not na(pivlow)', 'if eqOn and bar_index % 9 == 4'),
+          # Same dead path, one layer up: wicked_high/wicked_low are only ever set inside the pivot
+          # sweep loops, so the SMT latch's assignment branch is unreachable on synthetic bars. The
+          # sweep CONDITION gains a periodic leg (harness only); the sibling comparison it guards -
+          # the actual SMT arithmetic - is the shipped code, against the chart's own series, so all
+          # this proves is that the latch executes, counts and ages. Divergence itself needs two real
+          # symbols and is not claimed anywhere in this run.
+          ('if wicked_low and sibLo > sibLoPrior', 'if (wicked_low or bar_index % 29 == 3) and sibLo > sibLoPrior'),
+          ('if wicked_high and sibHi < sibHiPrior', 'if (wicked_high or bar_index % 31 == 7) and sibHi < sibHiPrior'),
+          ('float tol = eqTolT * syminfo.mintick', 'float tol = 1e9'),
+          # A candidate that never gets a second touch expires with the swings; on the reference
+          # runtime's daily bars the scaled expiry is 3 bars, so every candidate would die decades
+          # (in bar terms) before the substituted detector offers it a partner. Widen the parameter.
+          ('expiry_bars            = input.int(60,', 'expiry_bars            = input.int(5000,'),
+          ('"Auto from chart", "Timeframe Preset"', '"Custom", "Timeframe Preset"'),
+          # pyne resolves literal symbols only; a computed symbol string comes back na, which would
+          # make this exercise 'prove' the SMT-NODATA guard instead of the latch. Literal it is.
+          ('[sibHi, sibLo] = request.security(smtEffSym, "", [high, low])', '[sibHi, sibLo] = request.security(syminfo.tickerid, "", [high, low])')],
+         # smtBull is must-fire; smtBear is probed but not required: the synthetic series trends one
+         # way, so a self-sibling confirms every new high and the bearish latch has nothing to catch.
+         # Requiring it would be requiring the data to be a different shape, not the code to work.
+         ["kzlSeen", "newsBlk", "openSets", "eqMade", "smtBull"]),
     ],
 }
 

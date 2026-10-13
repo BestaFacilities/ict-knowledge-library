@@ -1176,3 +1176,75 @@ The `f_kzTag` wording change moved the alert and panel text from `LNDN high` to 
 the words inputs say); if you have alert webhooks keying on the old string, that is the one thing here that
 could surprise a machine rather than an eye.
 
+## 19. The context round (2026-10-13, third build of the day)
+
+**How this round started.** Not with a screenshot but with a question: "Other features we should add? Or
+other that are not necessary to my trading? Make me a good analysis, then after we're done with this round
+of ameliorations, give me the full optimal settings." The analysis separated three buckets — worth adding,
+not necessary, and already-present-but-unnecessary-for-this-trader — and the user picked the profile the
+settings would be written for: **MNQ multi-timeframe (1m/5m/15m), full day, CISD primary with CRT armed,
+core round plus SMT**. Everything in this section is downstream of those four answers; a London-only FX
+trader should build a different subset and §19 is not evidence otherwise.
+
+**What the analysis found, in the order it was built.**
+
+1. *The level layer could not be consulted.* §17/§18 built and decorated `grp_kzl`, and nothing in the
+   score or gate read it — "swept the Asia high, closed back inside" remained a sentence a human says
+   about the chart, not a test the file runs. P2 (`scKzl`, `require_kzl_sweep`, both off) is the §8 plan
+   arriving two builds after the drawing, which was the plan: draw first, prove the registry, then let
+   it near the grade. The raid latches (`kzlRaidBarHi/Lo`) record the bar and the side at the event site;
+   the score reads them inside the liquidity lookback, so a raid ages out on the same clock as any other
+   sweep in this file.
+2. *The target was ranked, not measured.* `get_liq_target` picked PDH over Asia H over London H by fixed
+   priority. On an index chart that aims trades at pools that are not the draw. `tgtMode = "Nearest pool"`
+   ranks every live candidate — prior day, sessions, un-taken killzone levels, equal pools, the 18-bar
+   swing — by distance. Default stays `Fixed priority`: this changes drawn targets on real trades, so it
+   is a choice with the old behaviour as the shipped position, per the standing rule. The settings profile
+   (§5 of settings-by-pair) is where `Nearest pool` is actually recommended.
+3. *The core kept no record of itself.* CRT counted W/L/net R from its first build; BEST — the signal the
+   user takes — counted nothing, so every settings argument in this repository has been, for the core, an
+   argument from plausibility. The journal (`grp_jrn`, default on, counting only) follows each BEST entry
+   to its drawn TP/SL, stop winning same-bar ties, expiry counted at 0R rather than dropped. It is the
+   only default-on item in the round, defended the same way `kzlLblTick` was not: it draws nothing, gates
+   nothing, and a record that starts when you remember to enable it starts the day you stop needing it.
+4. *Equal extremes were five lines, not one pool.* `grp_eq` clusters pivots within a tick tolerance
+   into a single averaged pool with a touch count. Two details worth the record: a candidate's stale
+   clock runs from the bar its pivot *confirms*, not the pivot bar — a pivot is `len` bars old when
+   first seen, and the first draft expired candidates from their own bar, silently spending that much
+   of their life (on 15m, expiry 20 − len 11 = 9 usable bars); and a swept pool leaves the target list
+   immediately, because a wicked pool is spent liquidity, not a draw.
+5. *The blackout is a clock, and says so.* `grp_news` suppresses BEST around two user-set NY times. Pine
+   has no calendar; the honest version of this feature is "08:30 ± 15 on days you say so", and the panel
+   reads `NEWS-HALT` while it applies rather than the script merely going quiet.
+6. *SMT, as a point and not a layer.* `scSmt` plus one sibling `request.security` (4 calls total now).
+   The study's §4 architecture verdict stands — no registry, no drawings, no second state machine. The
+   read is swing-window, not pivot-matched, and the guide §9 says that in the same breath as the switch.
+   The sibling is fetched even with the point off so that a missing feed is a visible `SMT-NODATA`, a
+   small instance of the rule that has governed every layer here: an input that cannot fire must say why.
+7. *The opens are reference, not machinery.* 00:00 and 09:30 NY dotted lines, nothing reads them. Cheap,
+   and included because a level misremembered is worse than a level drawn.
+
+**What "not necessary" meant, and still means.** The analysis also listed what was refused: a calibrated
+letter grade (needs the journal's month first), an in-file HTF FVG registry (the overlay's job, §4 of the
+study), breaker/rejection/propulsion block species (vocabulary against an 80-box budget), VWAP and volume
+profile (no model in the corpus consumes them; TPO is not honestly expressible in Pine), quarterly-theory
+lookbacks at execution timeframe, and ten per-session KZL alert conditions (already refused in §17).
+Refusals are part of the build record because "fully featured" is how this file got to 2,000 lines.
+
+**Verification, including the two dead paths found on the way.** `pine-lint` clean, `pine-validate`
+CLEAN (the LOOP-CLAMP rule caught seven unguarded forward loops in the first draft of the EQ and target
+code — the rule exists for the reverse direction, and it was right in both), `--selftest` PASS, `pyne
+check` OK. The gate grew fifteen probes and an eighth exercise (three-phase substituted clock
+00:00/04:45/09:30, Custom preset, levels on): `kzlSeen=2396`, `kzlRaid=798` (the score latches execute),
+`eqMade=86`, `eqTaken=85`, `newsBlk=400`, `openSets=800`, `smtBull=41`, registry still capped at 12.
+Two reference-runtime dead paths were found and handled rather than stepped around: `ta.lowest(x)[1]`
+on a security-derived series returns `na` under pyne, so the sibling priors are computed as
+`ta.lowest(sibLo[1], n)` — history on the input, then the function — which is also the form that cannot
+drift a bar; and pyne produces no pivots at all on synthetic bars, so the exercise substitutes the EQ
+*detector condition* and the SMT *sweep condition* with periodic legs, documented in the harness, while
+the clustering, averaging, sweep, retirement and latch arithmetic behind them is shipped code. What
+that does not prove: that a real ES/NQ divergence looks like the latch's window read, or that BEST
+entries resolve the way the journal counts them — BEST has never fired on synthetic bars, so the
+journal's push/resolve branches are compile-verified and loop-executed, and their first real evidence
+is the user's chart. The default run's counters are unchanged from §18, which is the neutrality claim
+for the whole round.

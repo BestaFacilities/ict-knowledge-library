@@ -42,7 +42,15 @@ key levels, news times, the SMT sibling symbol, the killzone level **windows** i
 empty by default precisely so this bucket stays empty, and an index CFD whose Asia really is 19:00-23:00 on
 your feed should say so there rather than in a re-tuned `expiry_bars` - and where the dashboard sits
 (`Dashboard position`), which is a chart-layout question that used to be answered for you, whether the CRT layer is on at all (`crtOn`, default
-**off**), and whether the killzone level layer is (`kzlOn`, default **off**). See section 4.
+**off**), and whether the killzone level layer is (`kzlOn`, default **off**). See section 4. The context
+round (2026-10-13, audit §19) added one item to each of the other two buckets rather than a fourth:
+automatic - the news blackout times (`newsT1`/`newsT2`/`newsPre`/`newsPost`, minutes on the NY clock) and
+the two session opens (`openOn`), which are wall-clock facts like everything else in this bucket; derived -
+the journal expiry (`jrnExpiry`, in the table in section 2) and the windows the new score points read,
+which are the already-scaled `liqLook` rather than new bar counts of their own. Still yours, and new here:
+the SMT sibling symbol (`smtSym`, an instrument question, not a timeframe one), the equal-pool tolerance
+(`eqTolT`, in *ticks* of your feed), `tgtMode` (a model choice), and whether today is a data day
+(`newsOn`) - the one switch in the file that is a morning decision rather than a configuration.
 
 ## 2. What "auto" actually picks
 
@@ -72,16 +80,16 @@ only the ladder** - the windows keep following the chart, which is the point: on
 ### The numbers, generated
 
 ```
-| chart | tier it picks | scale | expiry | liq look | clean after | iFVG age | CRT / OB age | FVG / OB fresh | prem-disc | KZL session min | expiry as time | clean as time |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1m | `3min` | x5 | 300 | 60 | 175 | 900 | 60 | 50 / 60 | 125 | 30 | 5.0 h | 2.9 h |
-| 3m | `3min` | x1.67 | 100 | 20 | 58 | 300 | 20 | 17 / 20 | 42 | 10 | 5.0 h | 2.9 h |
-| 5m | `5min` | x1 | 60 | 12 | 35 | 180 | 12 | 10 / 12 | 25 | 6 | 5.0 h | 2.9 h |
-| 15m | `15min` | x0.3333 | 20 | 4 | 12 | 60 | 4 | 3 / 4 | 8 | 3 | 5.0 h | 3.0 h |
-| 30m | `30min` | x0.1667 | 10 | 3 | 6 | 30 | 3 | 3 / 3 | 8 | 3 | 5.0 h | 3.0 h |
-| 60m | `60min` | x0.0833 | 5 | 3 | 3 | 15 | 3 | 3 / 3 | 8 | 3 | 5.0 h | 3.0 h |
-| 4H | `240min` | x0.0208 | 3 | 3 | 3 | 4 | 3 | 3 / 3 | 8 | 3 | 12.0 h | 12.0 h |
-| 1D | `1D` | x0.0035 | 3 | 3 | 3 | 3 | 3 | 3 / 3 | 8 | 3 | 72 h | 72 h |
+| chart | tier it picks | scale | expiry | liq look | clean after | iFVG age | CRT / OB age | FVG / OB fresh | prem-disc | KZL session min | journal expiry | expiry as time | clean as time |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1m | `3min` | x5 | 300 | 60 | 175 | 900 | 60 | 50 / 60 | 125 | 30 | 1200 | 5.0 h | 2.9 h |
+| 3m | `3min` | x1.67 | 100 | 20 | 58 | 300 | 20 | 17 / 20 | 42 | 10 | 400 | 5.0 h | 2.9 h |
+| 5m | `5min` | x1 | 60 | 12 | 35 | 180 | 12 | 10 / 12 | 25 | 6 | 240 | 5.0 h | 2.9 h |
+| 15m | `15min` | x0.3333 | 20 | 4 | 12 | 60 | 4 | 3 / 4 | 8 | 3 | 80 | 5.0 h | 3.0 h |
+| 30m | `30min` | x0.1667 | 10 | 3 | 6 | 30 | 3 | 3 / 3 | 8 | 3 | 40 | 5.0 h | 3.0 h |
+| 60m | `60min` | x0.0833 | 5 | 3 | 3 | 15 | 3 | 3 / 3 | 8 | 3 | 20 | 5.0 h | 3.0 h |
+| 4H | `240min` | x0.0208 | 3 | 3 | 3 | 4 | 3 | 3 / 3 | 8 | 3 | 5 | 12.0 h | 12.0 h |
+| 1D | `1D` | x0.0035 | 3 | 3 | 3 | 3 | 3 | 3 / 3 | 8 | 3 | 3 | 72 h | 72 h |
 ```
 
 Read the last two columns, not the middle ones, and treat `KZL session min` as a floor rather than a
@@ -175,6 +183,85 @@ only timeframe, nothing changes for you and the auto path costs you nothing to k
 `require_liq_sweep`, `require_fvg`, `min_score_inp` 3, `crtOn` with `crtAnchorH` 1 / `crtAnchorLen` 240 /
 `crtAccept = Close back inside`, `crtBias = HTF bias`, `crtOneShot` on, `crtSA` on. Leave `htf_tf` at 60, which is what the intraday bias in
 the source material reads.
+
+
+### MNQ on CME — the full profile (added 2026-10-13, for the context-round build)
+
+The profile the user actually trades, stated once and completely: **MNQ (CME_MINI:MNQ1! or the dated
+contract), 5-minute execution chart (15m for context, 1m only to refine an entry the 5m already
+justified), full New York day, CISD + iFVG primary with the CRT layer armed as a second read.** Every
+field below is either *set this* or *leave it — Auto owns it*. Nothing here has been backtested; it is
+the configuration that matches how the models in `concepts/` describe themselves, on the instrument the
+parameters were re-derived for in section 3's terms. The journal row (`BEST record`) is how this profile
+earns or loses the right to be called optimal: compare months, not afternoons.
+
+**Set these (everything not listed stays at its shipped default):**
+
+| group | setting | value | why |
+|---|---|---|---|
+| PRESET | `Timeframe Preset` | `Auto from chart` | the whole point: 1m/5m/15m with no manual re-tuning |
+| Core Confluences | `Require Liquidity Sweep` | **on** | a touch is not a sweep (02-liquidity) |
+| Core Confluences | `Require FVG / iFVG` | **on** | the entry condition of the model |
+| Core Confluences | `Require HTF Bias Alignment` | **on** | counter-bias is the largest reported win-rate killer; on MNQ the "bias" here is the 1H EMA read — a brake, not a thesis |
+| Core Confluences | `HTF for Bias` | `60` on 1m/5m, `240` on 15m, `480` on 30m | the one timeframe setting the script will not derive (request.security needs a constant) |
+| Elite Confluences | all four `Require …` | off | they are vetoes looking for a journal verdict; the score counts their facts without requiring them |
+| Quality & Risk | `Auto target selection` | **`Nearest pool`** | the fixed priority aims at rank, not at the draw (audit §19.2) |
+| Quality & Risk | `Target the finished session's extreme` | on (default) | never aim at a level the current bar is still printing |
+| Quality & Risk | `Risk:Reward Target` | 2.0 (default) | the drawn target line is information; the TP is this multiple, and the journal grades it |
+| Time engine | `Trading window` | `Killzone` | |
+| Time engine | `London open`, `New York AM`, `London close`, `New York PM` | **on, on, on, on** | full day. `Asia` stays **off** as a signalling window — its levels matter (next rows), its 5m signals are the ones every source rates near-zero |
+| Time engine | `Only signal inside the trading window`, `Mark the Silver Bullet hours`, `Mark the five macro cores` | on (defaults) | |
+| Time engine | `No new signals after this NY hour` | 16 (default) | the full-day read; 11 is the strict AM-only variant below |
+| NY AM open range | `Use the 08:00 opening range as a pool`, `Require an opening-range sweep` | **on, on** | the 09:00–11:00 raid of the 08:00 range is the AM model (31-models) |
+| NY AM open range | `Range length` / sweep window | 30 / 09:00–11:00 (defaults) | |
+| 4H candle range | `Use a reference candle's range as the day's grid` | **on** | armed, not primary: it vetoes nothing until the strict variant |
+| 4H candle range | `Reference range` / anchor / length / window | `Prev 4H candle` / 1 / 240 / 0 + 90 min (defaults) | the 01:00 NY anchor and the 01:30 raid |
+| 4H candle range | `Direction filter` / `Entry trigger` | `HTF bias` / **`iFVG tap`** | the raid arms it, the inverted zone is the entry — the two models share one trigger grammar |
+| 4H candle range | `CBDR cap` / `Asian range cap` | **0 / 0** | both are denominated in *pips*; on MNQ the numbers are in the wrong unit (section 3). The unit-free stand-aside tests (`ADR multiple`, trend and tight fractions) stay on |
+| 4H candle range | `Skip if the risk is under this many ticks` | **20** | 20 MNQ ticks = 5.00 points; 10 ticks sits within a bad fill's slippage |
+| 4H candle range | `Apply the 2017 stand-aside list`, `One setup per anchor candle` | on (defaults) | |
+| 4H candle range | `Let this layer veto the CISD score` | **off** | CISD is primary in this profile; CRT informs through the score point below |
+| iFVG engine | `iFVG layer` | **`Track + score`** | entries drawn, counted, not required. `+ gate` is the strict variant |
+| iFVG engine | `Entry level` / `Invalidation needs a body of` | `CE (50%)` / 0.80 (defaults) | |
+| Score composition | `Count displacement` | **off** | the ratio passes ~88% of bars (audit §1a); a point that cannot fail is not information |
+| Score composition | `Count premium / discount`, `Count strong body %` | **on, on** | the two facts that can actually fail on an index chart |
+| Score composition | `Count a live inverted zone…`, `Count an armed reference setup…` | on (first is default), **on** | |
+| Score composition | `Count a raided killzone level` | **on** | the Asia/London extreme you swept is now a graded fact, not a drawing |
+| Score composition | `Count SMT divergence (sibling)` | **on** | with `SMT sibling symbol = CME_MINI:ES1!`, window 20. No ES data on your plan reads `SMT-NODATA` and costs nothing |
+| Signal journal | `Journal BEST outcomes` | on (default) | row 17 is the profile's report card |
+| Equal highs / lows | `Track relative equal highs / lows as pools` | **on** | 10 ticks = 2.50 MNQ points of "equal"; pools feed the nearest target |
+| News blackout | `Suppress BEST around release times` | **on on data days only** | 08:30 and 10:00 NY, ±15 min. Pine has no calendar: CPI/NFP/ISM mornings you switch it on, quiet days you switch it off. Leaving it on all month mutes two good hours a day for nothing |
+| Session opens | `Draw the true-day and 09:30 opens` | **on** | reference lines; on an index the 09:30 cash open is a real level |
+| Killzone levels | `Track each session's high and low as a level` | **on** | the layer the score now reads |
+| Killzone levels | session switches | **all five on**, `Add the prior day's high and low` on | full day = five sessions of pools; remember the Globex-day caveat on PDH/PDL |
+| Killzone levels | `Live levels kept` | **20** | five sessions × 2 bounds + PDH/PDL is 12 a day; at 12 the cap eats yesterday's un-raided levels, which are the point of `Until taken` |
+| Killzone levels | `Projection` / `A level is taken when` | `Until taken` / `Close through` (defaults) | |
+| Killzone levels (look) | windows | **empty** | empty keeps levels and gate on the same times by construction |
+| Killzone levels (look) | colours / names / style | defaults | yours; the defaults are the ones the screenshots already read |
+| Appearance | `Dashboard position` | `Bottom left` | top right is where MNQ's recent bars and the level labels live |
+| Appearance | `Overlay painted candles…` | **off** | your own candle colours back; screenshots stop lying about which script drew what |
+
+**Leave these alone — Auto owns them on any non-Custom preset:** `Noise Filter`, `Swing Period`,
+`Minimum Score for BEST` (the ladder sets 2 on 1m–15m; strictness in this profile comes from the Require
+gates and the score composition, not from that number), `Signal Cooldown`, `SL Buffer (ATR)`,
+`Near price = ATR ×`, `Max FVGs/OBs per side`, and every bar count in section 2's table (`Expiry Bars`,
+`Liquidity Lookback`, journal expiry, iFVG age, KZL session minimum…). Editing them under Auto does
+nothing on some rows and half of something on others; `Custom` is the only honest way to pin them, and
+this profile does not need it.
+
+**Per-timeframe deltas (the only ones):** `HTF for Bias` per the row above; on 1m expect the score to
+be noisier and lean on `Require Liquidity Sweep` rather than loosening it; on 15m the KZL layer is at
+home, on 1H the two-hour sessions stop producing levels at all (section 2) — run levels on the 5m/15m
+chart and bias on the 1H, which is the split the whole file is shaped for.
+
+**The strict (A+-only) variant — four flips from the sheet above:** `Require a raided killzone level`
+**on**, `iFVG layer = Track + score + gate`, `Let this layer veto the CISD score` **on**, and
+`No new signals after` 11 if the day is AM-only. Expect a fraction of the signals; the journal row is
+the only honest way to learn whether the fraction is the good fraction.
+
+**What this profile cannot fix:** the HTF bias is an EMA-50 trend read on the HTF close, not structure;
+SMT here is a swing-window failure-to-confirm, not a drawn divergence; and no setting in the file knows
+whether today has CPI at 08:30 — that remains a human's first trade of the day.
 
 **The same model on 15m or 30m.** Change nothing but the chart. You get 15min/30min scoring and windows
 of a third or a sixth of the bar count, which is the same elapsed time. Watch the panel's first row: it

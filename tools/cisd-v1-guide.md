@@ -46,6 +46,13 @@ defaults to "wrong" is a trap; everything that adds *behaviour* is opt-in:
 | which sessions are pooled, and whether PDH/PDL join them | five per-session booleans + `Add the prior day's high and low` | Asia / London / NY AM on, London close / NY PM off, PDH/PDL on |
 | how a level dies, and how long it waits | `A level is taken when` / `Projection` | `Close through` / `Until taken` |
 | colours, names, session windows, label text and placement, line style, shade strength, dashboard corner | `Killzone levels: colours, names, windows` group + `Dashboard position` | every default is the behaviour of the build before it, except the shade transparency (35 → 88, look only) - §8 |
+| those levels as a score point or a gate (P2 of the §8 plan) | `Count a raided killzone level` / `Require a raided killzone level` | off / off - §9 |
+| the auto target picked by distance instead of by rank | `Auto target selection` | `Fixed priority`, the shipped behaviour - §9 |
+| a running record of BEST outcomes (W/L, net R) on panel row 17 | `Journal BEST outcomes` | **on** - counting only, moves nothing - §9 |
+| relative equal highs/lows clustered as pools | `Track relative equal highs / lows as pools` | off - §9 |
+| BEST suppressed around release times you set | `Suppress BEST around release times` | off, and a per-day decision - §9 |
+| SMT failure-to-confirm as a score point | `Count SMT divergence (sibling)` + sibling symbol | off - §9 |
+| true-day (00:00 NY) and 09:30 cash open lines | `Draw the true-day and 09:30 opens` | off - §9 |
 
 Fixed with no switch, because they were simply wrong: the pivot detector now runs on `high`/`low`
 instead of the default `hlc3` while the level drawn was `high[len]`/`low[len]`; the entry marks are
@@ -78,7 +85,7 @@ Quieter / afternoon variant: `Trading window = Killzone + Macro`, `London close`
 
 ## 3. Reading the panel
 
-Rows 0–12, one line each: `Score` (now `n/m`, m = what is actually being scored), `Analysis`
+Rows 0–17, one line each: `Score` (now `n/m`, m = what is actually being scored), `Analysis`
 (which zones are live), `Live FVGs`, `Live OBs`, `iFVG` (`2 inverted / 8 gaps` — gaps are the memory
 the inversions are computed from), `Prem/Disc`, `HTF Bias`, `Window` (what you filtered on, plus
 `+SB` / `+MACRO` when you are inside one), `Ready`, `Preset`, `Open range` (its two levels and which
@@ -135,7 +142,7 @@ made, so this layer costs **no additional `request.security`** (still 3 total).
 ### What the two new panel rows mean
 
 `4H CRT` is the state and the three levels: `watching the bounds`, `armed — waiting for the trigger`,
-`live`, `delivered`, `stopped`, `void`, or `STAND ASIDE: <which condition>`. `CRT why` is the last thing
+`live`, `delivered`, `stopped`, `void`, or `STAND ASIDE: <which condition>`. `BEST record` (row 17) is the journal: `3W/2L/1xp/0 open | +2.0R | 60%` for every BEST entry the chart produced, resolved against its own drawn TP/SL. `CRT why` is the last thing
 that happened plus the running record — `W/L/be/void` counts, net R, the win rate off entries taken, and
 **the average R that was available at the opposite bound**, which is the number that tells you whether
 the "+3RR" label in those posts is real on your pair (on the prices printed in the screenshot it is
@@ -246,7 +253,7 @@ the reason to trust the middle ones, and the 4H/1D rows are the reason to stay s
    nothing happened".
 3. **Paste and add.** Chart → bottom panel → Pine Editor → New Script → replace everything → Save As
    `CISD Ultimate Balanced` → Add to chart.
-4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-kzlcust`**.
+4. **Confirm the build.** The legend must read **`CISD Ultimate Balanced · build 2026-10-13-context`**.
    The tag is bumped whenever the file changes, so this step is a fact and not a guess; if the legend shows the old string you are looking at
    the old compile, and nothing you conclude from that chart is about this file.
 5. **Choose the chart.** `EURUSD` or `GBPUSD`, 5m or 15m, is what everything here is tuned and verified for.
@@ -407,4 +414,35 @@ looks like the synthetic one (the exercise relaxes `sweepStrict` to make the rai
 §17 has the arithmetic), and none of this is a claim about profit. The lines have been drawn by nobody but
 pyne's interpreter: the paste, and one look at a real session, is still the test.
 
+## 9. The context round (`grp_jrn`, `grp_eq`, `grp_news`, `grp_smt`, `grp_open`) — added 2026-10-13, third build of the day
 
+The request was an analysis first: what else should this file do, and what should it refuse to do. The
+analysis (audit §19) found the trigger machinery deep and the context thin — the file could test "was a
+recent pivot swept" but not "was the ASIAN HIGH swept", it aimed targets by rank instead of distance, and
+it kept no record of its own signals. Seven pieces were built, all behind switches, in one round:
+
+| piece | switch | default | what it changes |
+|---|---|---|---|
+| killzone levels enter the score and the gate | `Count a raided killzone level` (`scKzl`) / `Require a raided killzone level` | off / off | one score point, or a hard gate, when a session extreme or PDH/PDL was raided and rejected within the liquidity lookback — high raided scores shorts, low raided scores longs. This is P2 of the §8 plan, two builds late and deliberately so |
+| nearest-pool target | `Auto target selection` | `Fixed priority` (the shipped behaviour) | `Nearest pool` ranks prior-day, session, killzone-level, equal-pool and swing candidates by distance in the trade direction and draws the closest. Fixed priority could aim a long at a PDH 80 points away with the Asia high 6 points overhead |
+| BEST journal | `Journal BEST outcomes` | **on** | panel row 17, `BEST record`: every BEST entry followed to its drawn TP or SL (stop wins a same-bar tie), then counted `3W/2L/1xp/0 open \| +2.0R \| 60%`. Counting only — it moves no signal. On by default because a counter you must remember to enable starts the day you stop needing it |
+| equal highs / lows | `Track relative equal highs / lows as pools` | off | swing extremes within `Equal within this many ticks` cluster into one dashed pool with a touch count (`EQH x3`), swept by a wick that closes back, retired by a close through. Pools feed the nearest target. A single pivot is a candidate, not a pool, and expires unconfirmed |
+| news blackout | `Suppress BEST around release times` | off | two NY times ± minutes suppress BEST and the panel reads `NEWS-HALT`. Pine has no economic calendar, so the times are yours and the switch is a per-day decision, not a setting |
+| SMT score point | `Count SMT divergence (sibling)` (`scSmt`) + `SMT sibling symbol` | off / `CME_MINI:ES1!` | at a sweep, did the sibling fail to take its own equivalent extreme? One point, aligned side only. No data on your plan reads `SMT-NODATA` in Score parts instead of never firing quietly |
+| session opens | `Draw the true-day and 09:30 opens` | off | the 00:00 NY (true-day) open and the 09:30 cash open as dotted lines. Reference only; nothing reads them |
+
+Two things this round deliberately did **not** build, from the same analysis: an A+/B+ letter grade (the
+existing `Score` fraction already prints a grade; a *calibrated* one needs a month of journal rows first,
+which is what row 17 is for), and an HTF FVG registry inside this file (the archived
+`mx-context-overlay.pine` does it as a separate layer, which remains the right architecture — §5 of the
+study has the object-budget argument).
+
+One honest limit, stated where it belongs: the SMT read is a **swing-window** comparison (sibling's
+current extreme against its own prior `SMT swing window` extremes at the sweep bar), not a pivot-matched
+divergence drawing. It answers the score's question — "did they confirm?" — on the bar it is asked. It
+does not draw the divergence, and on a one-symbol chart (sibling left blank) it can never fire, by
+construction.
+
+The full MNQ settings profile that turns most of this on is `tools/settings-by-pair.md` §5 — written for
+MNQ on 1m/5m/15m, full day, CISD primary with the CRT layer armed, and maintained under the same rule as
+every other input change.

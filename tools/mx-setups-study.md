@@ -187,7 +187,12 @@ is the week-long comparison against your own letters that would earn the right t
 > the setup models) is not, and nothing in this section should be read as if it were. A second build the same
 > day made the layer customizable on request - colours, names, the five windows themselves, label text and
 > placement, shade strength, the dashboard corner (audit §18). The window inputs are empty by default, which is
-> what keeps "the level layer and the killzone gate share their times" true unless someone decouples them. Two deviations, both
+> what keeps "the level layer and the killzone gate share their times" true unless someone decouples them.
+> A third build the same day shipped P2 in its narrow form - `scKzl` (one score point) and
+> `require_kzl_sweep` (a gate), both off by default, fed by raid latches the registry records as levels are
+> rejected (audit §19) - together with the rest of that day's context round: nearest-pool targets, a BEST
+> outcome journal, EQH/EQL pools, a clock-based news blackout, an SMT score point and the two session opens.
+> The setup models themselves (a named-level raid *as* a model, with its own entry grammar) remain unbuilt. Two deviations, both
 > deliberate and both written into the source where they would otherwise be mistaken for an oversight:
 > per-session `kzl_s_*` switches rather than the five `kz_*` gate flags, and a `kzlRaid` must-fire key that
 > needed `sweepStrict` relaxed to fire on synthetic bars (see the plan below: it predicted `kzlSwp > 0`
