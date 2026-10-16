@@ -315,3 +315,12 @@ The rule, so the next change does not silently strand it:
    a bar-count-to-minutes conversion) can be checked by rerunning the generator. Anything that is a source
    claim keeps its citation in `tools/crt-candle-range-study.md`. Do not launder a source claim into a
    recommendation.
+
+## 7. The ManipulationX replica (tools/mx-replica.pine)
+
+Settings for the replica live with its guide (`tools/mx-replica-guide.md`, Section "Settings,
+per the pairs you run"). The two numbers that carry across from the original's panel and must
+not be copied blindly: the EQ tolerance was 0.15 *points on MNQ* (scale it to the symbol, never
+below a tick), and the SMT symbol stays `TVC:DXY` on MNQ — it is a dollar-correlation read, not
+a sibling future. The HTF FVG slots are the one manual change allowed when you leave the 1m/3m
+widths: 15-minute/1-hour delivery below 15-minute charts, 1-hour/4-hour on a 15-minute chart.

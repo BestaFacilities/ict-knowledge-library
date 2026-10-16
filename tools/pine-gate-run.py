@@ -36,6 +36,22 @@ SHIMS = {
         (r'arrMin\s*=\s*input\.float\([0-9.]+', 'arrMin = input.float(0.0'),
         (r'poolMin\s*=\s*input\.int\([0-9]+', 'poolMin = input.int(2'),
     ],
+    "mx-replica.pine": [
+        (r"^float pivHiL = ta\.pivothigh\(.*$",
+         "float pivHiL = high > ta.highest(high[1], 4) and high == ta.highest(high, 5) ? high : na"),
+        (r"^float pivLoL = ta\.pivotlow\(.*$",
+         "float pivLoL = low < ta.lowest(low[1], 4) and low == ta.lowest(low, 5) ? low : na"),
+        (r"^float pivHiS = ta\.pivothigh\(.*$",
+         "float pivHiS = high > ta.highest(high[1], 4) and high == ta.highest(high, 5) ? high : na"),
+        (r"^float pivLoS = ta\.pivotlow\(.*$",
+         "float pivLoS = low < ta.lowest(low[1], 4) and low == ta.lowest(low, 5) ? low : na"),
+        # pyne has one synthetic symbol; the sibling becomes the chart's own pivots. That proves the
+        # SMT comparison and drawing code executes - it cannot prove divergence (see the guide).
+        (r"^float sibPivHi = request\.security.*$",
+         "float sibPivHi = high > ta.highest(high[1], 4) and high == ta.highest(high, 5) ? high : na"),
+        (r"^float sibPivLo = request\.security.*$",
+         "float sibPivLo = low < ta.lowest(low[1], 4) and low == ta.lowest(low, 5) ? low : na"),
+    ],
     "cisd-ultimate-proper-v2.pine": [
         (r"^float hh\b = ta\.pivothigh\(.*$",
          "float hh = high == ta.highest(high, 9) ? high : na"),
@@ -81,6 +97,12 @@ PROBES = {
     "mx-context-overlay.pine": ['plot(array.size(aTop), "arrs")', 'plot(array.size(pPx), "pools")',
                                  'plot(box.count(), "boxes")', 'plot(label.count(), "labels")',
                                  'plot(invSeen, "inverted")'],
+    "mx-replica.pine": ['plot(sweepCt, "sweeps")', 'plot(invCt, "inversions")',
+                         'plot(sigR, "sigR")', 'plot(sigC, "sigC")', 'plot(eqCt, "eqCt")',
+                         'plot(smtCt, "smtCt")', 'plot(array.size(lvY), "lvls")',
+                         'plot(array.size(fvTop), "gaps")', 'plot(array.size(aTop), "htf")',
+                         'plot(line.count(), "lines")', 'plot(box.count(), "boxes")',
+                         'plot(label.count(), "labels")'],
     "cisd-ultimate-balanced.pine": ['plot(array.size(ivTop), "izones")', 'plot(array.size(fvTop), "igaps")',
                                     'plot(box.count(), "boxes")', 'plot(line.count(), "lines")', 'plot(crtState, "crtState")', 'plot(crtSeen, "crtSeen")', 'plot(crtSweeps, "crtSwp")', 'plot(crtEntries, "crtEnt")', 'plot(crtVoids, "crtVoid")', 'plot(crtFiltered, "crtFilt")', 'plot(crtNetR, "crtNetR")', 'plot(crtWhyCode, "crtWhy")',
                                     'plot(label.count(), "labels")',
@@ -349,6 +371,25 @@ EXERCISES = {
           ('kzlDrawTaken  = input.bool(true,', 'kzlDrawTaken  = input.bool(false,'),
           ('dashCompact           = input.bool(false,', 'dashCompact           = input.bool(true,')],
          ["kzlSeen", "kzlTake", "kzlDim"]),
+    ],
+    "mx-replica.pine": [
+        # The engine exercise. pyne's bars are contiguous, so the shipped gap tests (low > high[2])
+        # can never fire and the whole FVG/inversion/signal chain would sit behind a green run that
+        # executed none of it - the failure this file exists to catch. The trigger condition is
+        # substituted for a close-drift one and the pushed geometry is forced to a real gap, exactly
+        # as the v1 exercises above do; the registry, inversion, leg accounting, classification and
+        # filter code that runs behind it is the shipped code. sweepWin widens to the whole series
+        # for the same reason the CRT tick floor is zeroed above: on synthetic bars 'a sweep within
+        # 30 bars of the inversion' is a property of the data, not of the classification branch, and
+        # the branch is what is being proven. sigC is probed but not required (bias alignment on a
+        # one-way synthetic trend is data-shaped); smtCt likewise (the sibling IS the chart here).
+        ("mx engine: sweeps, gaps, inversions, signals",
+         [('bool bullFvg = low > high[2] and (low - high[2]) >= ifvgMin', 'bool bullFvg = close[1] > close[3]'),
+          ('bool bearFvg = high < low[2] and (low[2] - high) >= ifvgMin', 'bool bearFvg = close[1] < close[3]'),
+          ('array.push(fvTop, low)', 'array.push(fvTop, math.max(low, high[2] + 9.0))'),
+          ('array.push(fvBot, high)', 'array.push(fvBot, math.min(high, low[2] - 9.0))'),
+          ('sweepWin  = input.int(30,', 'sweepWin  = input.int(200,')],
+         ["sweeps", "inversions", "sigR", "lvls", "gaps", "htf"]),
     ],
 }
 

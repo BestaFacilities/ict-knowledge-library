@@ -289,3 +289,59 @@ test points at - which is the class of change that has repeatedly been worth mor
 and it is exactly the kind of change that has also repeatedly been wrong on first contact with a live
 chart. It ships behind `kzlOn`, it is off by default, and the panel will say what it thinks.
 
+
+## 9. Second screenshot set (2026-10-16): the settings panels, and what they settle
+
+Nine charts (MNQ 3m/1m/5m/15m/30m/1H/4H/1D + the XAUUSD 5m from earlier the same morning) and
+eleven settings panels. The panels are the most valuable evidence yet, because they enumerate
+the input surface — and a feature list read off inputs is not inference, it is dictation.
+
+**Feature inventory, as shipped (defaults are the user's saved config, not factory):**
+signal filters as *checkboxes* (Volume, Session DOL, V-Shape, SMT), `Show A+ Reversals Only`,
+`Show Recent Trades Only`, a manual `Daily Bias` dropdown (Neutral in the shot), Continuations
+labelled `C`, Reversals `R`, `Use Ez Killzones`; killzones NY 09:30-11:00 / London 02:30-04:00 /
+Custom; iFVG block (min size 1, size filter, "All iFVGs In Leg Must Inverse"); two HTF FVG slots
+(15m + 1H, mitigation 100%, type Wicks, max 6 each); BSL/SSL levels (pivot Length 20, max 10,
+hide overlapping, swept = dashed, resting = solid); LRL (min 3 swing points, max 5 lines);
+EQH/EQL (max difference 0.15, unswept only, max 2, dotted); Key Levels (Asia H/L and London H/L
+on, the rest off: day/week/month opens and prior extremes, NWOG, 8AM CR, 9AM CR); six macro
+windows (50-10 past the hour); SMT (correlated symbol `TVC:DXY` even on MNQ charts — the SMT
+lines on the NQ frames read "SMT w/ DXY", so the dollar is his NQ sibling, not ES); the 8-row
+checklist panel. The author's own description names three components: **Sweep** (fakeouts of key
+pivots), **Momentum** (divergences, overbought/oversold), **Inverse FVG** (order-flow shift
+confirming entries, "Internal Liquidity Model").
+
+**What the timeframes settle about the engine:**
+- `R` sits at swept extremes (02:28 1m low after the SSS dashed line, 03:55 5m low at the EQL);
+  `C` sits mid-leg in the bias direction. Reversal = sweep + iFVG inversion; Continuation =
+  inversion aligned with the timeframe's own bias without a fresh sweep.
+- Bias is **per-timeframe and computed**: at 04:56 the same moment reads Bullish on 3m/5m/15m/1D
+  and Bearish on 1m/30m/1H/4H. A manual dropdown set to Neutral cannot produce that, so Neutral
+  must mean "no manual override" over a structure read.
+- HTF zones are labelled by timeframe *and sign* (`15M FVG-` above price, `15M FVG+` below),
+  grey regardless of side, and they are the delivery context the checklist grades.
+- `SSS` marks a swept level where the line turns dashed; `LRL` diagonals connect same-side
+  swing extremes (the runway); EQH/EQL are orange text on dotted lines, unswept only.
+
+**Build verdict (this round):** a separate script, `tools/mx-replica.pine` — *not* merged into
+the CISD file (the §4 argument is unchanged: security calls, object budget, and a different
+state machine), and not a reskin of `mx-context-overlay` (that one deliberately has no signals;
+this one is the signal engine the overlay was paired with). MX's group names are used for the
+input layout because the user already knows that vocabulary; every definition underneath is
+ours, written from the observable behaviour above, and each inferred (not observed) rule is
+marked as inferred in the replica guide. Two settings could not be observed in action and are
+implemented as the literal reading of their labels: `Show A+ Reversals Only` (reversals needing
+a near-full checklist) and `All iFVGs In Leg Must Inverse` (every counter-FVG born in the sweep
+leg must invert before the signal prints).
+
+### Build outcome (2026-10-13, same day)
+
+`tools/mx-replica.pine` implements the inventory above with the verdict's chain, and
+`tools/mx-replica-guide.md` is the field guide. Verified the way every script in this repo is:
+`tools/pine-validate.py` CLEAN, `tools/pine-lint.sh` 0 errors, and the gate exercise fires the
+whole chain on the reference runtime (sweeps=402, inversions=798, sigR=402, sigC=396, caps held).
+Three deliberate deviations from the original's settings, each one toggle deep and stated in the
+guide: the killzone gate is off by default (their own tags break a hard-gate reading), Bias is
+computed per-timeframe with the dropdown as override, and the HTF FVG slots are fixed inputs
+defaulting to 15-minute/1-hour delivery. Nothing in the replica is their code; it could not be
+read, and the inferred rules are named as inferred.

@@ -1,0 +1,871 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════════
+// MX REPLICA - an original implementation matching the OBSERVABLE behaviour of
+// ManipulationX V.8, built from the user's own screenshots of its charts and its
+// settings panels (inventory: tools/mx-setups-study.md sections 1-9). No line of
+// this file comes from that script: it is closed-source, and what is replicated
+// here is chart behaviour - the sweep -> SMT/momentum -> iFVG-inversion signal
+// chain, the C/R tags, the HTF FVG registry, the liquidity furniture and the
+// Bias/Checklist panel. Where a definition could not be observed (the A+ cutoff,
+// the exact leg accounting, the bias read), the code says INFERRED and the guide
+// repeats it. Definitions are ours; the vocabulary follows MX's settings panels
+// because that is the layout the user already knows.
+// ═══════════════════════════════════════════════════════════════════════════════
+indicator("MX Replica · build 2026-10-16-mx1", "MX-R", true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 80)
+
+grpS = "======= SIGNAL SETTINGS ======="
+fVolume   = input.bool(false, "Volume Filter", group=grpS, tooltip="MX checkbox. On = a signal also needs relative volume at or above the Volume multiple at its bar. Filters in MX gate the TAG, not the engine: the inversion is still counted either way.")
+fSessDol  = input.bool(false, "Session DOL Filter", group=grpS, tooltip="On = a signal also needs an untaken session level (Asia / London / NY / prior day) beyond price in its direction - a draw to aim at.")
+fVshape   = input.bool(false, "V-Shape Filter", group=grpS, tooltip="On = a signal also needs the sharp sweep-and-recover (the V) within the sweep window behind it.")
+fSmt      = input.bool(false, "SMT Filter", group=grpS, tooltip="On = a signal also needs an SMT divergence in its direction within the sweep window.")
+aPlusOnly = input.bool(false, "Show A+ Reversals Only", group=grpS, tooltip="INFERRED: the label is all that can be observed, so A+ is implemented as a reversal whose checklist (for its direction, at its bar) scores at least the A+ minimum below. Continuations are unaffected.")
+aPlusMin  = input.int(6, "A+ minimum checklist (of 8)", minval=1, maxval=8, group=grpS)
+recentOnly = input.bool(false, "Show Recent Trades Only", group=grpS, tooltip="On = only the last N signal tags stay on the chart; older ones are deleted, not faded.")
+keepSig   = input.int(12, "Signal tags kept when recent-only", minval=1, maxval=100, group=grpS)
+biasMode  = input.string("Auto", "Daily Bias", options=["Auto", "Bullish", "Bearish", "Neutral"], group=grpS, tooltip="MX ships this as a dropdown reading Neutral on the user's config, yet his panels show Bullish on one timeframe and Bearish on another at the same moment - so Neutral there means no manual override over a computed read. Here: Auto = the computed structure bias of THIS chart; Bullish/Bearish force it; Neutral = no lean, continuations allowed both ways.")
+showSig   = input.bool(true, "Show Signals", group=grpS)
+sigTxtC   = input.string("C", "Continuations label", group=grpS)
+sigTxtR   = input.string("R", "Reversals label", group=grpS)
+sweepWin  = input.int(30, "Sweep stays valid for (bars)", minval=1, maxval=200, group=grpS, tooltip="How long a swept level keeps a following inversion a Reversal rather than a Continuation, and the window the V-Shape and SMT filters look back over.")
+sigLen    = input.int(10, "Signal / SMT pivot length", minval=2, maxval=30, group=grpS)
+
+grpK = "======= KILLZONES ======="
+kzGate    = input.bool(false, "Require a killzone for signals", group=grpK, tooltip="MX's killzones are drawn windows; whether they gate cannot be observed (his tags print two minutes outside the London window), so the gate is offered and defaults off, as his 'Use Ez Killzones' sits unchecked.")
+kzLonOn   = input.bool(true, "London KZ", group=grpK)
+kzLon     = input.string("02:30-04:00", "London KZ window (NY)", group=grpK)
+kzNyOn    = input.bool(true, "NY Killzone", group=grpK)
+kzNy      = input.string("09:30-11:00", "NY killzone window (NY)", group=grpK)
+kzCusOn   = input.bool(false, "Custom KZ", group=grpK)
+kzCus     = input.string("09:30-23:00", "Custom KZ window (NY)", group=grpK)
+
+grpI = "======= IFVG ======="
+showIfvg  = input.bool(true, "Show iFVGs", group=grpI, tooltip="The inverted zones themselves, drawn grey as in MX. The signal engine reads the same registry whether this is on or off.")
+ifvgMin   = input.float(1.0, "Minimum Size (points)", minval=0.0, step=0.25, group=grpI, tooltip="MX: Minimum Size 1 with the Size Filter on. Points of the chart symbol: 1.0 on MNQ is four ticks; on gold the user's own config carries the same 1, which there means a dollar.")
+legAll    = input.bool(true, "All iFVGs In Leg Must Inverse", group=grpI, tooltip="MX's own words. On = after a sweep, every counter-trend FVG born during the sweep leg must have inverted before any signal in the new direction prints; the inversion that completes the set is the signal. Off = the first inversion is enough.")
+
+grpH = "======= HTF FVG ======="
+htf1On    = input.bool(true, "Show Internal Liquidity (FVG) slot 1", group=grpH)
+htf1Tf    = input.timeframe("15", "Slot 1 timeframe", group=grpH)
+htf2On    = input.bool(true, "Show Internal Liquidity (FVG) slot 2", group=grpH)
+htf2Tf    = input.timeframe("60", "Slot 2 timeframe", group=grpH)
+htfMax    = input.int(6, "Max FVGs per slot", minval=1, maxval=12, group=grpH, tooltip="MX: Max FVGs 6, Mitigation Method 100%, Type Wicks - a zone dies when price wicks to its far edge, not on a close. Implemented exactly that way.")
+
+grpL = "======= LIQUIDITY LEVELS ======="
+liqOn     = input.bool(true, "Show BSL/SSL Levels", group=grpL)
+liqLen    = input.int(20, "Length", minval=2, maxval=60, group=grpL, tooltip="MX: Length 20. The pivot length that makes a 'key pivot point' for the level registry - and therefore for the sweeps the whole engine keys on.")
+liqMax    = input.int(10, "Max Levels", minval=1, maxval=40, group=grpL, tooltip="Per side, as read off MX's panels.")
+hideOver  = input.bool(true, "Hide Overlapping", group=grpL, tooltip="A new pivot within a quarter-ATR of a standing level of the same side is the same pool, not a second line.")
+liveOnly  = input.bool(false, "Show Live Levels only", group=grpL, tooltip="On = swept levels are deleted instead of turning dashed. MX ships it off and keeps swept levels dashed with the SSS tag.")
+
+grpR = "======= LOW RESISTANCE LIQUIDITY (LRL) ======="
+lrlOn     = input.bool(true, "Show Low Resistance Liquidity", group=grpR)
+lrlMinPts = input.int(3, "Minimum Swing Points", minval=2, maxval=6, group=grpR, tooltip="INFERRED: MX draws the diagonal when at least this many same-side swings step the same way (descending highs, ascending lows). Implemented as: the line is drawn through the last two such swings and labelled once the count reaches the minimum.")
+lrlMax    = input.int(5, "Max LRL Lines", minval=1, maxval=10, group=grpR)
+lrlRecent = input.bool(true, "Show Recent Only", group=grpR)
+
+grpE = "======= EQUAL HIGHS/LOWS ======="
+eqOn      = input.bool(true, "Show Equal Highs/Lows", group=grpE)
+eqTol     = input.float(1.0, "Max Difference (points)", minval=0.0, step=0.25, group=grpE, tooltip="MX ships 0.15 - on the gold config those panels came from. On MNQ a point is a point: 1-4 is the usable range, and 0.15 would need the same tick twice.")
+eqMax     = input.int(2, "Max EQH/EQL", minval=1, maxval=6, group=grpE, tooltip="Per side. Unswept only, as in MX: a swept pool leaves the chart (it may still be the sweep that arms a reversal).")
+
+grpY = "======= KEY LEVELS ======="
+klDayOpen = input.bool(false, "Day Open", group=grpY)
+klPd      = input.bool(false, "Previous Day High/Low", group=grpY)
+klWeek    = input.bool(false, "Week Open / Previous Week High/Low", group=grpY)
+klMonth   = input.bool(false, "Month Open / Previous Month High/Low", group=grpY)
+klLon     = input.bool(true, "London High/Low (03:00-11:30 NY)", group=grpY, tooltip="The user's MX config has London and Asia checked and the rest off; session bounds here are the cash sessions, and the windows are named in the labels so a wrong one is visible rather than silent.")
+klNy      = input.bool(false, "New York High/Low (09:30-16:00 NY)", group=grpY)
+klAsia    = input.bool(true, "Asia High/Low (20:00-00:00 NY)", group=grpY)
+klNwog    = input.bool(false, "Show NWOG", group=grpY, tooltip="New-week opening gap: last week's close against this week's open, drawn as a zone while unfilled.")
+klCr8     = input.bool(true, "8AM CR", group=grpY, tooltip="The 08:00-09:00 NY candle range as two lines (8AM-H / 8AM-L) for the rest of the day - the candle-range idea in its smallest form.")
+klCr9     = input.bool(true, "9AM CR", group=grpY, tooltip="The 09:00-10:00 NY candle range (9AM-H / 9AM-L).")
+klLabels  = input.bool(true, "Show Labels (abbreviated)", group=grpY)
+
+grpM = "======= MACRO SETTINGS ======="
+mac1 = input.bool(true, "09:50-10:10", group=grpM)
+mac2 = input.bool(true, "10:50-11:10", group=grpM)
+mac3 = input.bool(false, "11:50-12:10", group=grpM)
+mac4 = input.bool(false, "12:50-13:10", group=grpM)
+mac5 = input.bool(false, "13:50-14:10", group=grpM)
+mac6 = input.bool(false, "14:50-15:10", group=grpM)
+
+grpT = "======= SMT DIVERGENCE ======="
+smtOn     = input.bool(true, "Show SMT Divergences", group=grpT)
+smtSym    = input.symbol("TVC:DXY", "Correlated Symbol", group=grpT, tooltip="MX on the user's charts correlates everything to the dollar (his MNQ frames read 'SMT w/ DXY'). For index-vs-index SMT set CME_MINI:ES1! here instead. The label takes the symbol's short name.")
+smtRecent = input.int(2, "Show Only Recent", minval=1, maxval=10, group=grpT)
+
+grpP = "======= SIGNAL CHECKLIST ======="
+panelOn   = input.bool(true, "Show Signal Checklist", group=grpP)
+panelPos  = input.string("Bottom right", "Checklist Position", options=["Bottom right", "Bottom left", "Top right", "Top left"], group=grpP)
+volMult   = input.float(1.0, "Volume Filter: relative volume >=", minval=0.1, maxval=3.0, step=0.1, group=grpP, tooltip="Volume against its 20-bar average, read at the signal bar. MX exposes the filter as a checkbox only, so the multiple lives here.")
+
+// ─── units and clock ───
+float atrR = ta.atr(14)
+float unit = atrR > 0.0 ? atrR : syminfo.mintick * 10
+int nyMin = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+f_winS(string spec) =>
+    // "HH:MM-HH:MM" on the NY clock; unreadable text is simply never in-window (MX takes time
+    // pickers, which cannot be mistyped - this is the price of text inputs, and it is refused
+    // rather than guessed for the same reason as in the CISD file).
+    int dash = str.pos(spec, "-")
+    float a = dash > 0 ? str.tonumber(str.replace_all(str.substring(spec, 0, dash), ":", "")) : na
+    float b = dash > 0 ? str.tonumber(str.replace_all(str.substring(spec, dash + 1, str.length(spec)), ":", "")) : na
+    bool ok = not na(a) and not na(b)
+    int aM = ok ? int(a / 100) * 60 + int(a % 100) : -1
+    int bM = ok ? int(b / 100) * 60 + int(b % 100) : -1
+    ok and (bM >= aM ? nyMin >= aM and nyMin < bM : nyMin >= aM or nyMin < bM)
+bool inKz = (kzLonOn and f_winS(kzLon)) or (kzNyOn and f_winS(kzNy)) or (kzCusOn and f_winS(kzCus))
+bool inMac = (mac1 and f_winS("09:50-10:10")) or (mac2 and f_winS("10:50-11:10")) or (mac3 and f_winS("11:50-12:10")) or (mac4 and f_winS("12:50-13:10")) or (mac5 and f_winS("13:50-14:10")) or (mac6 and f_winS("14:50-15:10"))
+bool newNyDay = nz(nyMin[1]) > nyMin
+
+// ═══════════════════════════════════════════════════════════════════
+// KEY LEVELS - session extremes, opens, candle ranges
+// ═══════════════════════════════════════════════════════════════════
+// Completed sessions become two lines each, drawn from the bar the session closed. The live
+// session is accumulated but not drawn, so a line never moves after it is placed.
+f_klLine(line old, label oldLb, float y, int x1, string txt, color c) =>
+    if not na(old)
+        line.delete(old)
+    if not na(oldLb)
+        label.delete(oldLb)
+    line nl = line.new(x1, y, x1 + 1, y, extend=extend.right, color=c, style=line.style_solid)
+    label nb = klLabels ? label.new(x1 + 1, y, txt, style=label.style_label_left, color=color.new(color.black, 100), textcolor=c, size=size.tiny) : na
+    [nl, nb]
+
+var float asHi = na
+var float asLo = na
+var float loHi = na
+var float loLo = na
+var float nyHi = na
+var float nyLo = na
+var bool asAct = false
+var bool loAct = false
+var bool nyAct = false
+var line asHiLn = na
+var line asLoLn = na
+var line loHiLn = na
+var line loLoLn = na
+var line nyHiLn = na
+var line nyLoLn = na
+var label asHiLb = na
+var label asLoLb = na
+var label loHiLb = na
+var label loLoLb = na
+var label nyHiLb = na
+var label nyLoLb = na
+color klCol = color.new(#5b6b7a, 25)
+// session-DOL registry: completed session extremes and the prior day, marked taken on a close
+// through. This is the list the Session DOL checklist row and filter read.
+var float[] keyY = array.new_float()
+var int[] keyDir = array.new_int()
+var bool[] keyTaken = array.new_bool()
+f_keyPush(float y, int d) =>
+    if not na(y)
+        array.push(keyY, y)
+        array.push(keyDir, d)
+        array.push(keyTaken, false)
+        if array.size(keyY) > 16
+            array.shift(keyY)
+            array.shift(keyDir)
+            array.shift(keyTaken)
+    1
+
+bool inAsiaW = f_winS("20:00-00:00")
+bool inLonW = f_winS("03:00-11:30")
+bool inNyW = f_winS("09:30-16:00")
+if inAsiaW
+    asHi := na(asHi) ? high : math.max(asHi, high)
+    asLo := na(asLo) ? low : math.min(asLo, low)
+    asAct := true
+else if asAct
+    asAct := false
+    if klAsia
+        [asHiLn, asHiLb] = f_klLine(asHiLn, asHiLb, asHi, bar_index, "AS-H", klCol)
+        [asLoLn, asLoLb] = f_klLine(asLoLn, asLoLb, asLo, bar_index, "AS-L", klCol)
+    f_keyPush(asHi, 1)
+    f_keyPush(asLo, -1)
+    asHi := na
+    asLo := na
+if inLonW
+    loHi := na(loHi) ? high : math.max(loHi, high)
+    loLo := na(loLo) ? low : math.min(loLo, low)
+    loAct := true
+else if loAct
+    loAct := false
+    if klLon
+        [loHiLn, loHiLb] = f_klLine(loHiLn, loHiLb, loHi, bar_index, "Lon-H", klCol)
+        [loLoLn, loLoLb] = f_klLine(loLoLn, loLoLb, loLo, bar_index, "Lon-L", klCol)
+    f_keyPush(loHi, 1)
+    f_keyPush(loLo, -1)
+    loHi := na
+    loLo := na
+if inNyW
+    nyHi := na(nyHi) ? high : math.max(nyHi, high)
+    nyLo := na(nyLo) ? low : math.min(nyLo, low)
+    nyAct := true
+else if nyAct
+    nyAct := false
+    if klNy
+        [nyHiLn, nyHiLb] = f_klLine(nyHiLn, nyHiLb, nyHi, bar_index, "NY-H", klCol)
+        [nyLoLn, nyLoLb] = f_klLine(nyLoLn, nyLoLb, nyLo, bar_index, "NY-L", klCol)
+    f_keyPush(nyHi, 1)
+    f_keyPush(nyLo, -1)
+    nyHi := na
+    nyLo := na
+
+// day / week / month frame: opens are captured at their first bar, prior extremes come off the
+// same daily tuple trick the CISD file uses (one call, lookahead on the completed bar).
+[pdH, pdL] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+[pwH, pwL, pmH, pmL] = request.security(syminfo.tickerid, "W", [high[1], low[1], high[1], low[1]], lookahead=barmerge.lookahead_on)
+var float dayOpen = na
+var float wkOpen = na
+var float moOpen = na
+var float prevWkClose = na
+var line doLn = na
+var line pdHLn = na
+var line pdLLn = na
+var line wkLn = na
+var line pwHLn = na
+var line pwLLn = na
+var line moLn = na
+var line pmHLn = na
+var line pmLLn = na
+var label moLb = na
+var label pmHLb = na
+var label pmLLb = na
+var label doLb = na
+var label pdHLb = na
+var label pdLLb = na
+var label wkLb = na
+var label pwHLb = na
+var label pwLLb = na
+bool newWeek = ta.change(time("W")) != 0
+bool newMonth = ta.change(time("M")) != 0
+if newNyDay or barstate.isfirst
+    dayOpen := open
+    if klDayOpen
+        [doLn, doLb] = f_klLine(doLn, doLb, dayOpen, bar_index, "Day Open", klCol)
+    if klPd
+        [pdHLn, pdHLb] = f_klLine(pdHLn, pdHLb, pdH, bar_index, "PDH", klCol)
+        [pdLLn, pdLLb] = f_klLine(pdLLn, pdLLb, pdL, bar_index, "PDL", klCol)
+        f_keyPush(pdH, 1)
+        f_keyPush(pdL, -1)
+if newWeek
+    prevWkClose := close[1]
+    wkOpen := open
+    if klWeek
+        [wkLn, wkLb] = f_klLine(wkLn, wkLb, wkOpen, bar_index, "Week Open", klCol)
+        [pwHLn, pwHLb] = f_klLine(pwHLn, pwHLb, pwH, bar_index, "Previous Week High", klCol)
+        [pwLLn, pwLLb] = f_klLine(pwLLn, pwLLb, pwL, bar_index, "Previous Week Low", klCol)
+if newMonth
+    moOpen := open
+    if klMonth
+        [moLn, moLb] = f_klLine(moLn, moLb, moOpen, bar_index, "Month Open", klCol)
+        [pmHLn, pmHLb] = f_klLine(pmHLn, pmHLb, pmH, bar_index, "Previous Month High", klCol)
+        [pmLLn, pmLLb] = f_klLine(pmLLn, pmLLb, pmL, bar_index, "Previous Month Low", klCol)
+if array.size(keyY) > 0
+    for i = array.size(keyY) - 1 to 0
+        if i < 0 or i >= array.size(keyY)
+            continue
+        if not array.get(keyTaken, i)
+            float ky = array.get(keyY, i)
+            if array.get(keyDir, i) > 0 ? close > ky : close < ky
+                array.set(keyTaken, i, true)
+// 8AM / 9AM candle ranges
+var float cr8Hi = na
+var float cr8Lo = na
+var float cr9Hi = na
+var float cr9Lo = na
+var line cr8HLn = na
+var line cr8LLn = na
+var line cr9HLn = na
+var line cr9LLn = na
+var label cr8HLb = na
+var label cr8LLb = na
+var label cr9HLb = na
+var label cr9LLb = na
+if nyMin >= 480 and nyMin < 540
+    cr8Hi := na(cr8Hi) ? high : math.max(cr8Hi, high)
+    cr8Lo := na(cr8Lo) ? low : math.min(cr8Lo, low)
+if nyMin == 540 and klCr8 and not na(cr8Hi)
+    [cr8HLn, cr8HLb] = f_klLine(cr8HLn, cr8HLb, cr8Hi, bar_index, "8AM-H", klCol)
+    [cr8LLn, cr8LLb] = f_klLine(cr8LLn, cr8LLb, cr8Lo, bar_index, "8AM-L", klCol)
+    cr8Hi := na
+    cr8Lo := na
+if nyMin >= 540 and nyMin < 600
+    cr9Hi := na(cr9Hi) ? high : math.max(cr9Hi, high)
+    cr9Lo := na(cr9Lo) ? low : math.min(cr9Lo, low)
+if nyMin == 600 and klCr9 and not na(cr9Hi)
+    [cr9HLn, cr9HLb] = f_klLine(cr9HLn, cr9HLb, cr9Hi, bar_index, "9AM-H", klCol)
+    [cr9LLn, cr9LLb] = f_klLine(cr9LLn, cr9LLb, cr9Lo, bar_index, "9AM-L", klCol)
+    cr9Hi := na
+    cr9Lo := na
+// NWOG: the unfilled part of the week gap, one box, deleted when filled
+var box nwogBx = na
+var label nwogLb = na
+if klNwog and newWeek and not na(prevWkClose) and not na(wkOpen) and math.abs(wkOpen - prevWkClose) > syminfo.mintick
+    if not na(nwogBx)
+        box.delete(nwogBx)
+    if not na(nwogLb)
+        label.delete(nwogLb)
+    nwogBx := box.new(bar_index, math.max(prevWkClose, wkOpen), bar_index + 1, math.min(prevWkClose, wkOpen), bgcolor=color.new(color.purple, 85), border_color=color.new(color.purple, 60))
+    nwogLb := label.new(bar_index + 1, wkOpen, "NWOG", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.purple, size=size.tiny)
+if klNwog and not na(nwogBx)
+    box.set_right(nwogBx, bar_index + 1)
+    float nTop = box.get_top(nwogBx)
+    float nBot = box.get_bottom(nwogBx)
+    if low <= nTop and high >= nBot and close >= nBot and close <= nTop
+        box.delete(nwogBx)
+        nwogBx := na
+        if not na(nwogLb)
+            label.delete(nwogLb)
+            nwogLb := na
+
+// ═══════════════════════════════════════════════════════════════════
+// LIQUIDITY LEVELS (BSL/SSL) and the sweeps that arm the engine
+// ═══════════════════════════════════════════════════════════════════
+// MX component 1, in the author's words: "fakeout moves above or below key pivot points".
+// A level rests solid; the bar that wicks through it and closes back turns it dashed, tags it
+// SSS, and latches the sweep the signal engine then waits on.
+float pivHiL = ta.pivothigh(high, liqLen, liqLen)
+float pivLoL = ta.pivotlow(low, liqLen, liqLen)
+var float[] lvY = array.new_float()
+var int[] lvDir = array.new_int()
+var int[] lvSt = array.new_int()
+var line[] lvLn = array.new_line()
+var int sweepCt = 0
+var int lastSweepLongBar = -1000000    // SSL swept: a low was taken and rejected (long context)
+var int lastSweepShortBar = -1000000   // BSL swept: a high was taken and rejected
+var float lastSweepLongY = na
+var float lastSweepShortY = na
+f_lvDrop(int i) =>
+    line l = array.get(lvLn, i)
+    if not na(l)
+        line.delete(l)
+    array.remove(lvY, i)
+    array.remove(lvDir, i)
+    array.remove(lvSt, i)
+    array.remove(lvLn, i)
+f_lvPush(float y, int d) =>
+    bool dup = false
+    if hideOver and array.size(lvY) > 0
+        for j = array.size(lvY) - 1 to 0
+            if j < 0 or j >= array.size(lvY)
+                continue
+            if array.get(lvDir, j) == d and math.abs(array.get(lvY, j) - y) <= 0.25 * unit
+                dup := true
+    if not dup
+        array.push(lvY, y)
+        array.push(lvDir, d)
+        array.push(lvSt, 0)
+        array.push(lvLn, liqOn ? line.new(bar_index - liqLen, y, bar_index, y, extend=extend.right, color=color.new(color.black, 35), style=line.style_solid) : na)
+        int cnt = 0
+        if array.size(lvY) > 0
+            for j = array.size(lvY) - 1 to 0
+                if j < 0 or j >= array.size(lvY)
+                    continue
+                if array.get(lvDir, j) == d
+                    cnt += 1
+                    if cnt > liqMax
+                        f_lvDrop(j)
+    1
+if liqOn and not na(pivHiL)
+    f_lvPush(pivHiL, 1)
+if liqOn and not na(pivLoL)
+    f_lvPush(pivLoL, -1)
+if array.size(lvY) > 0
+    for i = array.size(lvY) - 1 to 0
+        if i < 0 or i >= array.size(lvY)
+            continue
+        line l = array.get(lvLn, i)
+        if not na(l)
+            line.set_x2(l, bar_index)
+        if array.get(lvSt, i) == 0
+            float y = array.get(lvY, i)
+            int d = array.get(lvDir, i)
+            bool swept = d > 0 ? high > y and close < y : low < y and close > y
+            if swept
+                array.set(lvSt, i, 1)
+                sweepCt += 1
+                if d > 0
+                    lastSweepShortBar := bar_index
+                    lastSweepShortY := y
+                else
+                    lastSweepLongBar := bar_index
+                    lastSweepLongY := y
+                if liveOnly
+                    f_lvDrop(i)
+                else if not na(l)
+                    line.set_style(l, line.style_dashed)
+                    label.new(bar_index, y, "SSS", style=d > 0 ? label.style_label_down : label.style_label_up, color=color.new(color.black, 100), textcolor=color.new(color.black, 25), size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════
+// FVG registry and the inversion engine (MX component 3)
+// ═══════════════════════════════════════════════════════════════════
+// A gap is born, rests, and either fills quietly or is CLOSED THROUGH - which inverts it: the
+// bearish gap price ran through becomes the bullish zone the entry is read from. The inversion
+// bar is the signal bar; everything else in this file decides what the tag says.
+bool bullFvg = low > high[2] and (low - high[2]) >= ifvgMin
+bool bearFvg = high < low[2] and (low[2] - high) >= ifvgMin
+var float[] fvTop = array.new_float()
+var float[] fvBot = array.new_float()
+var int[] fvDir = array.new_int()
+var int[] fvBar = array.new_int()
+var int[] fvSt = array.new_int()
+var box[] fvBx = array.new_box()
+var int invCt = 0
+// sweep-leg accounting for 'All iFVGs In Leg Must Inverse': counter-FVGs born since the sweep.
+var int legBearOpen = 0
+var int legBullOpen = 0
+f_fvDrop(int i) =>
+    box b = array.get(fvBx, i)
+    if not na(b)
+        box.delete(b)
+    array.remove(fvTop, i)
+    array.remove(fvBot, i)
+    array.remove(fvDir, i)
+    array.remove(fvBar, i)
+    array.remove(fvSt, i)
+    array.remove(fvBx, i)
+if bullFvg
+    array.push(fvTop, low)
+    array.push(fvBot, high[2])
+    array.push(fvDir, 1)
+    array.push(fvBar, bar_index - 1)
+    array.push(fvSt, 0)
+    array.push(fvBx, showIfvg ? box.new(bar_index - 1, low, bar_index + 6, high[2], bgcolor=color.new(color.gray, 88), border_color=color.new(color.gray, 70)) : na)
+    if bar_index - lastSweepShortBar <= sweepWin
+        legBullOpen += 1
+if bearFvg
+    array.push(fvTop, low[2])
+    array.push(fvBot, high)
+    array.push(fvDir, -1)
+    array.push(fvBar, bar_index - 1)
+    array.push(fvSt, 0)
+    array.push(fvBx, showIfvg ? box.new(bar_index - 1, low[2], bar_index + 6, high, bgcolor=color.new(color.gray, 88), border_color=color.new(color.gray, 70)) : na)
+    if bar_index - lastSweepLongBar <= sweepWin
+        legBearOpen += 1
+// inversion events this bar: dirOut is the direction of the order-flow shift
+int invDir = 0
+if array.size(fvTop) > 0
+    for i = array.size(fvTop) - 1 to 0
+        if i < 0 or i >= array.size(fvTop)
+            continue
+        int d = array.get(fvDir, i)
+        int st = array.get(fvSt, i)
+        box b = array.get(fvBx, i)
+        if not na(b)
+            box.set_right(b, bar_index + 6)
+        if st == 0
+            bool inv = d > 0 ? close < array.get(fvBot, i) : close > array.get(fvTop, i)
+            bool filled = d > 0 ? low <= array.get(fvBot, i) : high >= array.get(fvTop, i)
+            if inv
+                array.set(fvSt, i, 1)
+                invCt += 1
+                invDir := d > 0 ? -1 : 1
+                if d > 0
+                    legBullOpen := math.max(0, legBullOpen - 1)
+                else
+                    legBearOpen := math.max(0, legBearOpen - 1)
+                if not na(b)
+                    box.set_bgcolor(b, color.new(#5b6b7a, 78))
+            else if filled
+                f_fvDrop(i)
+        else if bar_index - array.get(fvBar, i) > 300
+            f_fvDrop(i)
+while array.size(fvTop) > 24
+    f_fvDrop(0)
+bool legClearLong = legBearOpen == 0
+bool legClearShort = legBullOpen == 0
+if bar_index - lastSweepLongBar > sweepWin
+    legBearOpen := 0
+if bar_index - lastSweepShortBar > sweepWin
+    legBullOpen := 0
+
+// ═══════════════════════════════════════════════════════════════════
+// EQUAL HIGHS / LOWS - one tolerance cluster, unswept only
+// ═══════════════════════════════════════════════════════════════════
+var float[] eqY = array.new_float()
+var int[] eqDir = array.new_int()
+var line[] eqLn = array.new_line()
+var label[] eqLb = array.new_label()
+var int eqCt = 0
+f_eqDrop(int i) =>
+    line l = array.get(eqLn, i)
+    label t = array.get(eqLb, i)
+    if not na(l)
+        line.delete(l)
+    if not na(t)
+        label.delete(t)
+    array.remove(eqY, i)
+    array.remove(eqDir, i)
+    array.remove(eqLn, i)
+    array.remove(eqLb, i)
+f_eqTouch(float y, int d) =>
+    int made2 = 0
+    int at = -1
+    if array.size(eqY) > 0
+        for j = array.size(eqY) - 1 to 0
+            if j < 0 or j >= array.size(eqY)
+                continue
+            if at < 0 and array.get(eqDir, j) == d and math.abs(array.get(eqY, j) - y) <= eqTol
+                at := j
+    if at >= 0
+        line l = array.get(eqLn, at)
+        label t = array.get(eqLb, at)
+        if na(l) and eqOn
+            float y0 = array.get(eqY, at)
+            array.set(eqLn, at, line.new(bar_index - liqLen, y0, bar_index, y0, extend=extend.right, color=color.new(color.orange, 30), style=line.style_dotted))
+            array.set(eqLb, at, label.new(bar_index, y0, d > 0 ? "EQH" : "EQL", style=d > 0 ? label.style_label_down : label.style_label_up, color=color.new(color.black, 100), textcolor=color.orange, size=size.tiny))
+            made2 := 1
+    else
+        int cnt = 0
+        if array.size(eqY) > 0
+            for j = array.size(eqY) - 1 to 0
+                if j < 0 or j >= array.size(eqY)
+                    continue
+                if array.get(eqDir, j) == d
+                    cnt += 1
+        if cnt < eqMax
+            array.push(eqY, y)
+            array.push(eqDir, d)
+            array.push(eqLn, na)
+            array.push(eqLb, na)
+    made2
+if eqOn and not na(pivHiL)
+    eqCt += f_eqTouch(pivHiL, 1)
+if eqOn and not na(pivLoL)
+    eqCt += f_eqTouch(pivLoL, -1)
+if array.size(eqY) > 0
+    for i = array.size(eqY) - 1 to 0
+        if i < 0 or i >= array.size(eqY)
+            continue
+        float y = array.get(eqY, i)
+        bool gone = array.get(eqDir, i) > 0 ? high > y and close < y or close > y : low < y and close > y or close < y
+        line l = array.get(eqLn, i)
+        if not na(l)
+            line.set_x2(l, bar_index)
+        if gone
+            f_eqDrop(i)
+
+// ═══════════════════════════════════════════════════════════════════
+// LRL - the diagonal runway through stepping swings (INFERRED geometry)
+// ═══════════════════════════════════════════════════════════════════
+var line[] lrlLn = array.new_line()
+var label[] lrlLb = array.new_label()
+var float lrlPrevHi = na
+var float lrlPrevLo = na
+var int lrlHiBar = 0
+var int lrlLoBar = 0
+var int lrlHiRun = 0
+var int lrlLoRun = 0
+f_lrlDraw(float y1, int x1, float y2, int x2, int run) =>
+    if run >= lrlMinPts
+        line nl = line.new(x1, y1, x2, y2, extend=extend.right, color=color.new(color.black, 45), style=line.style_solid)
+        array.push(lrlLn, nl)
+        array.push(lrlLb, label.new(x2, y2, "LRL", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(color.black, 35), size=size.tiny))
+        if lrlRecent
+            while array.size(lrlLn) > lrlMax
+                line ol = array.shift(lrlLn)
+                label ob = array.shift(lrlLb)
+                if not na(ol)
+                    line.delete(ol)
+                if not na(ob)
+                    label.delete(ob)
+    1
+if lrlOn and not na(pivHiL)
+    int pb = bar_index - liqLen
+    if not na(lrlPrevHi)
+        lrlHiRun := pivHiL < lrlPrevHi ? lrlHiRun + 1 : 1
+        f_lrlDraw(lrlPrevHi, lrlHiBar, pivHiL, pb, lrlHiRun)
+    lrlPrevHi := pivHiL
+    lrlHiBar := pb
+if lrlOn and not na(pivLoL)
+    int pb = bar_index - liqLen
+    if not na(lrlPrevLo)
+        lrlLoRun := pivLoL > lrlPrevLo ? lrlLoRun + 1 : 1
+        f_lrlDraw(lrlPrevLo, lrlLoBar, pivLoL, pb, lrlLoRun)
+    lrlPrevLo := pivLoL
+    lrlLoBar := pb
+
+// ═══════════════════════════════════════════════════════════════════
+// SMT - the sibling fails to confirm (MX component 2, 'Momentum')
+// ═══════════════════════════════════════════════════════════════════
+// Compared pivot to pivot, as in the overlay: my new lower low against the sibling's failure
+// to make one. MX draws the two chart swings joined, dotted, with 'SMT w/ <symbol>'.
+float pivHiS = ta.pivothigh(high, sigLen, sigLen)
+float pivLoS = ta.pivotlow(low, sigLen, sigLen)
+float sibPivHi = request.security(smtSym, "", ta.pivothigh(high, sigLen, sigLen), barmerge.gaps_off, ignore_invalid_symbol=true)
+float sibPivLo = request.security(smtSym, "", ta.pivotlow(low, sigLen, sigLen), barmerge.gaps_off, ignore_invalid_symbol=true)
+string sibName = smtSym == "TVC:DXY" ? "DXY" : str.replace_all(smtSym, "TVC:", "")
+var float myPrevLo = na
+var float myPrevHi = na
+var float sibPrevLo = na
+var float sibPrevHi = na
+var int myPrevLoBar = 0
+var int myPrevHiBar = 0
+var int smtBullBar = -1000000
+var int smtBearBar = -1000000
+var int smtCt = 0
+var line[] smtLn = array.new_line()
+var label[] smtLb = array.new_label()
+f_smtDraw(int x1, float y1, int x2, float y2) =>
+    array.push(smtLn, line.new(x1, y1, x2, y2, color=color.new(color.black, 40), style=line.style_dotted))
+    array.push(smtLb, label.new(x2, y2, "SMT w/ " + sibName, style=label.style_label_left, color=color.new(color.black, 100), textcolor=color.new(color.black, 30), size=size.tiny))
+    while array.size(smtLn) > smtRecent
+        line ol = array.shift(smtLn)
+        label ob = array.shift(smtLb)
+        if not na(ol)
+            line.delete(ol)
+        if not na(ob)
+            label.delete(ob)
+    1
+if smtOn and not na(pivLoS)
+    bool mineLL = not na(myPrevLo) and pivLoS < myPrevLo - syminfo.mintick
+    bool sibHeld = not na(sibPivLo) and not na(sibPrevLo) and sibPivLo > sibPrevLo
+    if mineLL and sibHeld
+        smtBullBar := bar_index
+        smtCt += 1
+        f_smtDraw(myPrevLoBar, myPrevLo, bar_index - sigLen, pivLoS)
+    myPrevLo := pivLoS
+    myPrevLoBar := bar_index - sigLen
+    sibPrevLo := sibPivLo
+if smtOn and not na(pivHiS)
+    bool mineHH = not na(myPrevHi) and pivHiS > myPrevHi + syminfo.mintick
+    bool sibHeldH = not na(sibPivHi) and not na(sibPrevHi) and sibPivHi < sibPrevHi
+    if mineHH and sibHeldH
+        smtBearBar := bar_index
+        smtCt += 1
+        f_smtDraw(myPrevHiBar, myPrevHi, bar_index - sigLen, pivHiS)
+    myPrevHi := pivHiS
+    myPrevHiBar := bar_index - sigLen
+    sibPrevHi := sibPivHi
+
+// ═══════════════════════════════════════════════════════════════════
+// HTF FVG registry (two slots, MX's 'Internal Liquidity')
+// ═══════════════════════════════════════════════════════════════════
+// The gap is measured on the higher timeframe and mitigated with this chart's wicks (MX:
+// 100%, Wicks). A security value held flat across a forming HTF bar means 'changed' IS the
+// new-gap event; per-side memory, the form proven in the overlay.
+f_tfLbl(string t) =>
+    t == "240" ? "4H" : t == "120" ? "2H" : t == "60" ? "1H" : t == "30" ? "30M" : t == "15" ? "15M" : t == "5" ? "5M" : t == "D" ? "1D" : t == "W" ? "1W" : t
+bool okH1 = htf1On and htf1Tf != timeframe.period
+bool okH2 = htf2On and htf2Tf != timeframe.period
+[h1u, h1l, h1t, h1b] = request.security(syminfo.tickerid, htf1Tf, [low[1] > high[3] ? low[1] : na, low[1] > high[3] ? high[3] : na, high[1] < low[3] ? low[3] : na, high[1] < low[3] ? high[1] : na], barmerge.gaps_off, lookahead=barmerge.lookahead_on, ignore_invalid_symbol=true)
+[h2u, h2l, h2t, h2b] = request.security(syminfo.tickerid, htf2Tf, [low[1] > high[3] ? low[1] : na, low[1] > high[3] ? high[3] : na, high[1] < low[3] ? low[3] : na, high[1] < low[3] ? high[1] : na], barmerge.gaps_off, lookahead=barmerge.lookahead_on, ignore_invalid_symbol=true)
+var float[] aTop = array.new_float()
+var float[] aBot = array.new_float()
+var int[] aDir = array.new_int()
+var string[] aTf = array.new_string()
+var box[] aBx = array.new_box()
+var int delivBullBar = -1000000
+var int delivBearBar = -1000000
+f_htfPush(float top, float bot, int d, string tfS) =>
+    int cnt = 0
+    bool dup = false
+    if array.size(aTop) > 0
+        for j = array.size(aTop) - 1 to 0
+            if j < 0 or j >= array.size(aTop)
+                continue
+            if array.get(aTf, j) == tfS
+                cnt += 1
+                if array.get(aDir, j) == d and math.abs(array.get(aTop, j) - top) < syminfo.mintick
+                    dup := true
+    if not dup and cnt < htfMax and top > bot
+        array.push(aTop, top)
+        array.push(aBot, bot)
+        array.push(aDir, d)
+        array.push(aTf, tfS)
+        array.push(aBx, box.new(bar_index, top, bar_index + 8, bot, bgcolor=color.new(color.gray, 82), border_color=color.new(color.gray, 65), text=f_tfLbl(tfS) + " FVG" + (d > 0 ? "+" : "-"), text_color=color.new(color.black, 30), text_size=size.tiny, text_halign=text.align_right, text_valign=text.align_center))
+    int(array.size(aTop))
+var float hm1 = na
+var float hk1 = na
+var float hm2 = na
+var float hk2 = na
+if okH1
+    if na(h1u)
+        hm1 := na
+    else if na(hm1) or h1u != hm1
+        hm1 := h1u
+        if not na(h1l)
+            f_htfPush(h1u, h1l, 1, htf1Tf)
+    if na(h1t)
+        hk1 := na
+    else if na(hk1) or h1t != hk1
+        hk1 := h1t
+        if not na(h1b)
+            f_htfPush(h1t, h1b, -1, htf1Tf)
+if okH2
+    if na(h2u)
+        hm2 := na
+    else if na(hm2) or h2u != hm2
+        hm2 := h2u
+        if not na(h2l)
+            f_htfPush(h2u, h2l, 1, htf2Tf)
+    if na(h2t)
+        hk2 := na
+    else if na(hk2) or h2t != hk2
+        hk2 := h2t
+        if not na(h2b)
+            f_htfPush(h2t, h2b, -1, htf2Tf)
+if array.size(aTop) > 0
+    for i = array.size(aTop) - 1 to 0
+        if i < 0 or i >= array.size(aTop)
+            continue
+        int d = array.get(aDir, i)
+        float tp = array.get(aTop, i)
+        float bt = array.get(aBot, i)
+        box b = array.get(aBx, i)
+        if not na(b)
+            box.set_right(b, bar_index + 8)
+        bool mitigated = d > 0 ? low <= bt : high >= tp
+        if d > 0 and low <= tp and close >= tp
+            delivBullBar := bar_index
+        if d < 0 and high >= bt and close <= bt
+            delivBearBar := bar_index
+        if mitigated
+            if not na(b)
+                box.delete(b)
+            array.remove(aTop, i)
+            array.remove(aBot, i)
+            array.remove(aDir, i)
+            array.remove(aTf, i)
+            array.remove(aBx, i)
+
+// ═══════════════════════════════════════════════════════════════════
+// BIAS (INFERRED: per-timeframe structure - the last pivot range broken)
+// ═══════════════════════════════════════════════════════════════════
+var int biasDir = 0
+var float lastPh = na
+var float lastPl = na
+if not na(pivHiS)
+    lastPh := pivHiS
+if not na(pivLoS)
+    lastPl := pivLoS
+if not na(lastPh) and close > lastPh
+    biasDir := 1
+if not na(lastPl) and close < lastPl
+    biasDir := -1
+int biasEff = biasMode == "Bullish" ? 1 : biasMode == "Bearish" ? -1 : biasMode == "Neutral" ? 0 : biasDir
+
+// ═══════════════════════════════════════════════════════════════════
+// CHECKLIST state (directional; read for the bias side)
+// ═══════════════════════════════════════════════════════════════════
+float volAvg = ta.sma(volume, 20)
+bool volOk = not na(volume) and not na(volAvg) and volume >= volAvg * volMult
+f_sessDol(int d) =>
+    bool found = false
+    if array.size(keyY) > 0
+        for j = array.size(keyY) - 1 to 0
+            if j < 0 or j >= array.size(keyY)
+                continue
+            if not array.get(keyTaken, j) and array.get(keyDir, j) == d and (d > 0 ? array.get(keyY, j) > close : array.get(keyY, j) < close)
+                found := true
+    found
+f_ltfDol(int d) =>
+    bool found = false
+    if array.size(lvY) > 0
+        for j = array.size(lvY) - 1 to 0
+            if j < 0 or j >= array.size(lvY)
+                continue
+            if array.get(lvSt, j) == 0 and array.get(lvDir, j) == d and (d > 0 ? array.get(lvY, j) > close : array.get(lvY, j) < close)
+                found := true
+    found
+f_chk(int d) =>
+    // [macro, sweep, htf delivery, volume, session DOL, LTF DOL, V-shape, SMT] as a count
+    int s = 0
+    s += inMac ? 1 : 0
+    s += (d > 0 ? bar_index - lastSweepLongBar <= sweepWin : bar_index - lastSweepShortBar <= sweepWin) ? 1 : 0
+    s += (d > 0 ? bar_index - delivBullBar <= 50 : bar_index - delivBearBar <= 50) ? 1 : 0
+    s += volOk ? 1 : 0
+    s += f_sessDol(d) ? 1 : 0
+    s += f_ltfDol(d) ? 1 : 0
+    s += (d > 0 ? bar_index - lastSweepLongBar <= 10 : bar_index - lastSweepShortBar <= 10) ? 1 : 0
+    s += (d > 0 ? bar_index - smtBullBar <= sweepWin : bar_index - smtBearBar <= sweepWin) ? 1 : 0
+    s
+bool chkMac = inMac
+bool chkSweepB = bar_index - lastSweepLongBar <= sweepWin
+bool chkSweepS = bar_index - lastSweepShortBar <= sweepWin
+int dispDir = biasEff != 0 ? biasEff : 1
+bool chkSwp = dispDir > 0 ? chkSweepB : chkSweepS
+bool chkHtf = dispDir > 0 ? bar_index - delivBullBar <= 50 : bar_index - delivBearBar <= 50
+bool chkSes = f_sessDol(dispDir)
+bool chkLtf = f_ltfDol(dispDir)
+bool chkV = dispDir > 0 ? bar_index - lastSweepLongBar <= 10 : bar_index - lastSweepShortBar <= 10
+bool chkSmt = dispDir > 0 ? bar_index - smtBullBar <= sweepWin : bar_index - smtBearBar <= sweepWin
+
+// ═══════════════════════════════════════════════════════════════════
+// SIGNALS - inversion, classified Reversal or Continuation, then filtered
+// ═══════════════════════════════════════════════════════════════════
+var int sigR = 0
+var int sigC = 0
+var label[] sigLbl = array.new_label()
+bool sigLongR = false
+bool sigLongC = false
+bool sigShortR = false
+bool sigShortC = false
+if invDir != 0
+    int d = invDir
+    bool legOk = not legAll or (d > 0 ? legClearLong : legClearShort)
+    bool freshSweep = d > 0 ? bar_index - lastSweepLongBar <= sweepWin : bar_index - lastSweepShortBar <= sweepWin
+    bool isR = freshSweep and legOk
+    bool isC = not isR and legOk and (biasEff == 0 or d == biasEff)
+    bool filtOk = (not fVolume or volOk) and (not fSessDol or f_sessDol(d)) and (not fVshape or (d > 0 ? bar_index - lastSweepLongBar <= 10 : bar_index - lastSweepShortBar <= 10)) and (not fSmt or (d > 0 ? bar_index - smtBullBar <= sweepWin : bar_index - smtBearBar <= sweepWin))
+    bool kzOk = not kzGate or inKz
+    if showSig and filtOk and kzOk and (isR or isC)
+        bool aOk = not (isR and aPlusOnly) or f_chk(d) >= aPlusMin
+        if aOk
+            label nl = label.new(bar_index, d > 0 ? low : high, isR ? sigTxtR : sigTxtC, style=d > 0 ? label.style_label_up : label.style_label_down, color=d > 0 ? #00c853 : #ff5252, textcolor=color.white, size=size.small)
+            array.push(sigLbl, nl)
+            if recentOnly
+                while array.size(sigLbl) > keepSig
+                    label ol = array.shift(sigLbl)
+                    if not na(ol)
+                        label.delete(ol)
+            if isR
+                sigR += 1
+                if d > 0
+                    sigLongR := true
+                    lastSweepLongBar := -1000000
+                else
+                    sigShortR := true
+                    lastSweepShortBar := -1000000
+            else
+                sigC += 1
+                if d > 0
+                    sigLongC := true
+                else
+                    sigShortC := true
+
+// ═══════════════════════════════════════════════════════════════════
+// PANEL - Bias header, then the eight checklist rows (MX's layout)
+// ═══════════════════════════════════════════════════════════════════
+string tbPos = panelPos == "Bottom right" ? position.bottom_right : panelPos == "Bottom left" ? position.bottom_left : panelPos == "Top right" ? position.top_right : position.bottom_right
+if panelOn and barstate.islast
+    var table tb = table.new(tbPos, 2, 10, bgcolor=color.new(#e8e8e8, 5), border_width=1)
+    string bTxt = biasEff > 0 ? "Bullish" : biasEff < 0 ? "Bearish" : "Neutral"
+    table.cell(tb, 0, 0, "Bias", bgcolor=color.black, text_color=color.white, text_size=size.tiny)
+    table.cell(tb, 1, 0, bTxt, bgcolor=color.black, text_color=biasEff > 0 ? #00c853 : biasEff < 0 ? #ff5252 : color.white, text_size=size.tiny)
+    table.cell(tb, 0, 1, "Checklist", bgcolor=color.black, text_color=color.white, text_size=size.tiny)
+    table.cell(tb, 1, 1, "Status", bgcolor=color.black, text_color=color.white, text_size=size.tiny)
+    table.cell(tb, 0, 2, "Macro", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 2, chkMac ? "✓" : "✗", text_color=chkMac ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 3, "Liquidity Sweep", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 3, chkSwp ? "✓" : "✗", text_color=chkSwp ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 4, "HTF Delivery", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 4, chkHtf ? "✓" : "✗", text_color=chkHtf ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 5, "Volume", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 5, volOk ? "✓" : "✗", text_color=volOk ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 6, "Session DOL", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 6, chkSes ? "✓" : "✗", text_color=chkSes ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 7, "LTF DOL", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 7, chkLtf ? "✓" : "✗", text_color=chkLtf ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 8, "V-Shape", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 8, chkV ? "✓" : "✗", text_color=chkV ? #00a844 : #d32f2f, text_size=size.tiny)
+    table.cell(tb, 0, 9, "SMT", text_color=color.new(color.black, 20), text_size=size.tiny)
+    table.cell(tb, 1, 9, chkSmt ? "✓" : "✗", text_color=chkSmt ? #00a844 : #d32f2f, text_size=size.tiny)
+
+alertcondition(sigLongR, "MX-R Reversal Long", "MX Replica: reversal long (sweep + iFVG inversion)")
+alertcondition(sigShortR, "MX-R Reversal Short", "MX Replica: reversal short (sweep + iFVG inversion)")
+alertcondition(sigLongC, "MX-R Continuation Long", "MX Replica: continuation long (iFVG inversion with bias)")
+alertcondition(sigShortC, "MX-R Continuation Short", "MX Replica: continuation short (iFVG inversion with bias)")
