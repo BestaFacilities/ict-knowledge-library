@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.50 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.51 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.50", shorttitle = "SNM+ 3.50", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.51", shorttitle = "SNM+ 3.51", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -92,6 +92,7 @@ string iNewsList = input.string("", "Other releases (NY): yyyy-mm-dd hhmm, ...",
 int iNewsBef = input.int(10, "Blackout before (min)", minval = 0, inline = "nw", group = G_C)
 int iNewsAft = input.int(15, "after (min)", minval = 0, inline = "nw", group = G_C)
 bool iNewsBg = input.bool(true, "Shade the blackout", group = G_C)
+string iZInvalid = input.string("Hybrid (HTF close)", "HTF FVG invalidation", options = ["Hybrid (HTF close)", "Chart close (3.50)"], group = G_C, tooltip = "Hybrid: a chart-TF close beyond the edge marks an HTF slot gap BREACHED and removes its delivery/target/5m-gap sponsorship immediately. The box remains informational until its own HTF candle closes: a close beyond deletes it; a reclaim clears BREACHED only from that HTF close onward. Chart close restores 3.50 removal. Sponsored 5m gaps retain chart-close removal.")
 string iZMode = input.string("Fixed", "HTF gap timeframe mode", options = ["Fixed", "Auto"], group = G_C, tooltip = "Fixed preserves the 3.48 15m/1H/4H delivery slots. Auto selects three strictly higher TFs from the entry chart (1m/3m → 15m/1H/4H, 5m/15m → 1H/4H/1D). This changes delivery and available targets only when enabled.")
 string iZTF1 = input.timeframe("15", "Fixed gap TF 1", group = G_C)
 string iZTF2 = input.timeframe("60", "Fixed gap TF 2", group = G_C)
@@ -102,7 +103,7 @@ bool iZ60 = input.bool(true, "Gap slot 2", inline = "h", group = G_C)
 bool iZ240 = input.bool(true, "Gap slot 3", inline = "h", group = G_C, tooltip = "All three gap slots feed delivery and draws. Use Fixed for 3.48 defaults or Auto to scale with the chart timeframe.")
 bool iZShow = input.bool(true, "Draw HTF gaps (slots 1–3)", inline = "zs", group = G_C, tooltip = "ManipulationX style: the gaps price is in, plus the nearest above and below, drawn from the candle that made them. FVG+ = bullish, FVG- = bearish")
 int iZN = input.int(2, "per side", minval = 1, maxval = 6, inline = "zs", group = G_C)
-bool iZIn = input.bool(false, "Also the gaps price is trading inside", group = G_C)
+bool iZIn = input.bool(true, "Also the gaps price is trading inside", group = G_C, tooltip = "Visual-only; ON includes gaps around current price, including a breached HTF gap waiting for its own timeframe close. Does not award delivery or grade.")
 bool iZ5Show = input.bool(false, "Draw 5M gaps too", group = G_C, tooltip = "5M gaps are always used as draws and (when sponsored) as delivery; drawing them adds clutter")
 string iMsTf = input.timeframe("15", "Structure timeframe (C / R)", group = G_C, tooltip = "with the structure = C (continuation), against = R (reversal). structure turns bullish on a close above the last swing high, bearish on a close below the last swing low (pivots 2/2)")
 bool iSmtOn = input.bool(true, "SMT with ES / NQ", group = G_C)
@@ -223,6 +224,8 @@ type Zn
     string spN = ""
     int tapB = -1
     float mit = na
+    int slot = 0
+    bool breached = false
 
 type Gp
     bool bull
@@ -406,6 +409,9 @@ f_zName(string tf) =>
 string zNm1 = f_zName(zTF1)
 string zNm2 = f_zName(zTF2)
 string zNm3 = f_zName(zTF3)
+int zSec1 = timeframe.in_seconds(zTF1)
+int zSec2 = timeframe.in_seconds(zTF2)
+int zSec3 = timeframe.in_seconds(zTF3)
 string hcTF1 = iHCMode == "Auto" ? (cm <= 1 ? "2" : cm <= 3 ? "5" : cm <= 5 ? "15" : cm <= 15 ? "60" : cm <= 60 ? "240" : "D") : iHCTF1
 string hcTF2 = iHCMode == "Auto" ? (cm <= 1 ? "3" : cm <= 3 ? "15" : cm <= 5 ? "30" : cm <= 15 ? "240" : cm <= 60 ? "D" : "W") : iHCTF2
 // Rank by the actual selected timeframe, not by a hard-coded label: a 45m / 3H manual
@@ -417,16 +423,16 @@ f_zRank(string tf) =>
 f_zf() =>
     bool bu = low > high[2]
     bool be = high < low[2]
-    [bu[1], be[1], high[3], low[1], low[3], high[1], time[3]]
-[u15, e15, ub15, ut15, et15, eb15, k15] = request.security(syminfo.tickerid, zTF1, f_zf(), lookahead = barmerge.lookahead_on)
-[u60, e60, ub60, ut60, et60, eb60, k60] = request.security(syminfo.tickerid, zTF2, f_zf(), lookahead = barmerge.lookahead_on)
-[u240, e240, ub240, ut240, et240, eb240, k240] = request.security(syminfo.tickerid, zTF3, f_zf(), lookahead = barmerge.lookahead_on)
-[u2, e2, ub2, ut2, et2, eb2, k2] = request.security(syminfo.tickerid, "2", f_zf(), lookahead = barmerge.lookahead_on)
-[u3, e3, ub3, ut3, et3, eb3, k3] = request.security(syminfo.tickerid, "3", f_zf(), lookahead = barmerge.lookahead_on)
-[u5, e5, ub5, ut5, et5, eb5, k5] = request.security(syminfo.tickerid, "5", f_zf(), lookahead = barmerge.lookahead_on)
-[fu15, fe15, fub15, fut15, fet15, feb15, fk15] = request.security(pTk, "15", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
-[fu60, fe60, fub60, fut60, fet60, feb60, fk60] = request.security(pTk, "60", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
-[fu240, fe240, fub240, fut240, fet240, feb240, fk240] = request.security(pTk, "240", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+    [bu[1], be[1], high[3], low[1], low[3], high[1], time[3], close[1]]
+[u15, e15, ub15, ut15, et15, eb15, k15, zClose1] = request.security(syminfo.tickerid, zTF1, f_zf(), lookahead = barmerge.lookahead_on)
+[u60, e60, ub60, ut60, et60, eb60, k60, zClose2] = request.security(syminfo.tickerid, zTF2, f_zf(), lookahead = barmerge.lookahead_on)
+[u240, e240, ub240, ut240, et240, eb240, k240, zClose3] = request.security(syminfo.tickerid, zTF3, f_zf(), lookahead = barmerge.lookahead_on)
+[u2, e2, ub2, ut2, et2, eb2, k2, _] = request.security(syminfo.tickerid, "2", f_zf(), lookahead = barmerge.lookahead_on)
+[u3, e3, ub3, ut3, et3, eb3, k3, _] = request.security(syminfo.tickerid, "3", f_zf(), lookahead = barmerge.lookahead_on)
+[u5, e5, ub5, ut5, et5, eb5, k5, _] = request.security(syminfo.tickerid, "5", f_zf(), lookahead = barmerge.lookahead_on)
+[fu15, fe15, fub15, fut15, fet15, feb15, fk15, _] = request.security(pTk, "15", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[fu60, fe60, fub60, fut60, fet60, feb60, fk60, _] = request.security(pTk, "60", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
+[fu240, fe240, fub240, fut240, fet240, feb240, fk240, _] = request.security(pTk, "240", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
 string ttTf = iTtSel == "Auto" ? (cm <= 1 ? "15" : cm <= 3 ? "30" : cm <= 5 ? "60" : "240") : iTtSel
 string ttNm = ttTf == "15" ? "15m" : ttTf == "30" ? "30m" : ttTf == "60" ? "1H" : "4H"
 int ttSec = timeframe.in_seconds(ttTf)
@@ -663,9 +669,11 @@ f_exact(bool hi, float px, int b0, int n) =>
 f_fill(Zn z) =>
     na(z.mit) ? 0.0 : (z.dir == 1 ? z.top - z.mit : z.mit - z.bot) / math.max(z.top - z.bot, syminfo.mintick)
 
-f_zAdd(int dir, float top, float bot, string tf, int t0) =>
+f_zAdd(int dir, float top, float bot, string tf, int t0, int slot) =>
     if not na(top) and not na(bot) and top > bot
-        zs.push(Zn.new(dir, top, bot, tf, t0))
+        Zn z = Zn.new(dir, top, bot, tf, t0)
+        z.slot := slot
+        zs.push(z)
         if zs.size() > 80
             zs.shift()
     true
@@ -675,7 +683,7 @@ f_zAdd5(int dir, float top, float bot, int t0) =>
     if not na(top) and not na(bot) and top > bot
         string sp = ""
         for z2 in zs
-            if z2.dir == dir and z2.tf != "5m" and bot <= z2.top + 0.25 * atr and top >= z2.bot - 0.25 * atr
+            if z2.dir == dir and z2.slot > 0 and z2.tf != "5m" and not z2.breached and bot <= z2.top + 0.25 * atr and top >= z2.bot - 0.25 * atr
                 sp := z2.tf
         zs.push(Zn.new(dir, top, bot, "5m", t0, sp != "", sp))
         int n5 = 0
@@ -690,6 +698,18 @@ f_zAdd5(int dir, float top, float bot, int t0) =>
         if zs.size() > 80
             zs.shift()
     true
+
+// An existing sponsored 5m gap cannot inherit delivery from a higher-TF box
+// that is merely visible while breached. Chart-close mode retains 3.50 semantics.
+f_zSponsor(Zn z) =>
+    bool active = z.sp
+    if iZInvalid == "Hybrid (HTF close)" and active
+        active := false
+        for parent in zs
+            if parent.slot > 0 and parent.tf != "5m" and not parent.breached and parent.dir == z.dir and z.bot <= parent.top + 0.25 * atr and z.top >= parent.bot - 0.25 * atr
+                active := true
+                break
+    active
 
 // a level is taken: start (or extend) the sweep on that side
 f_sweep(Lv v) =>
@@ -838,7 +858,7 @@ f_draw(bool isL, int d, float from, string mode) =>
                     tpFar := v.px
     for z in zs
         bool okTf = mode == "any" or (mode == "ltf" ? (z.tf == "5m" or z.tf == "15m") : z.tf != "5m")
-        if z.dir == -d and okTf and f_fill(z) < iFillMax
+        if z.dir == -d and okTf and not z.breached and f_fill(z) < iFillMax
             float edge = isL ? z.bot : z.top
             if isL ? edge >= from : edge <= from
                 if na(tp) or (isL ? edge < tp : edge > tp)
@@ -870,7 +890,7 @@ f_edge(bool isL, int d) =>
                 eN := v.nm
                 eFar := v.px
     for z in zs
-        if z.dir == -d and z.tf != "5m" and f_fill(z) < iFillMax
+        if z.dir == -d and z.tf != "5m" and not z.breached and f_fill(z) < iFillMax
             float edge = isL ? z.bot : z.top
             float dd = isL ? edge - ref : ref - edge
             if dd > 0 and dd <= edgeDist and (na(ep) or (isL ? edge < ep : edge > ep))
@@ -990,8 +1010,8 @@ f_deliv(int d, float ext) =>
     int rk = 0
     string nm = ""
     for z in zs
-        if z.dir == d and ext <= z.top + 0.25 * atr and ext >= z.bot - 0.25 * atr
-            int zr = z.tf == "5m" ? (z.sp ? 1 : 0) : f_zRank(z.tf)
+        if z.dir == d and not z.breached and ext <= z.top + 0.25 * atr and ext >= z.bot - 0.25 * atr
+            int zr = z.tf == "5m" ? (z.slot == 0 ? (f_zSponsor(z) ? 1 : 0) : (z.sp ? 1 : 0)) : f_zRank(z.tf)
             if zr > 0
                 htf := true
                 if zr > rk
@@ -1217,7 +1237,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
     string htfN = ""
     int htfRk = 0
     for z in zs
-        if z.dir == d and z.tf != "5m" and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
+        if z.dir == d and z.tf != "5m" and not z.breached and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
             int zr = f_zRank(z.tf)
             htf := true
             if zr > htfRk
@@ -1226,7 +1246,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
     // a 5M gap counts as delivery only when sponsored by a 15m / 1H / 4H gap
     if not htf
         for z in zs
-            if z.dir == d and z.tf == "5m" and z.sp and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
+            if z.dir == d and z.tf == "5m" and (z.slot == 0 ? f_zSponsor(z) : z.sp) and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
                 htf := true
                 htfRk := 1
                 htfN := "5m FVG (sponsored by " + z.spN + ")"
@@ -1728,14 +1748,14 @@ if barstate.isconfirmed and calc
     // higher timeframe gaps
     if iZ15 and (iZMode != "Auto" or timeframe.in_seconds(zTF1) > cs) and k15 != k15[1]
         if u15
-            f_zAdd(1, ut15, ub15, zNm1, k15)
+            f_zAdd(1, ut15, ub15, zNm1, k15, 1)
         if e15
-            f_zAdd(-1, et15, eb15, zNm1, k15)
+            f_zAdd(-1, et15, eb15, zNm1, k15, 1)
     if iZ60 and (iZMode != "Auto" or timeframe.in_seconds(zTF2) > cs) and k60 != k60[1]
         if u60
-            f_zAdd(1, ut60, ub60, zNm2, k60)
+            f_zAdd(1, ut60, ub60, zNm2, k60, 2)
         if e60
-            f_zAdd(-1, et60, eb60, zNm2, k60)
+            f_zAdd(-1, et60, eb60, zNm2, k60, 2)
     if iZ5 and k5 != k5[1]
         if u5
             f_zAdd5(1, ut5, ub5, k5)
@@ -1743,17 +1763,35 @@ if barstate.isconfirmed and calc
             f_zAdd5(-1, et5, eb5, k5)
     if iZ240 and (iZMode != "Auto" or timeframe.in_seconds(zTF3) > cs) and k240 != k240[1]
         if u240
-            f_zAdd(1, ut240, ub240, zNm3, k240)
+            f_zAdd(1, ut240, ub240, zNm3, k240, 3)
         if e240
-            f_zAdd(-1, et240, eb240, zNm3, k240)
+            f_zAdd(-1, et240, eb240, zNm3, k240, 3)
     if zs.size() > 0
         for i = zs.size() - 1 to 0
             Zn z = zs.get(i)
-            if z.dir == 1 ? close < z.bot : close > z.top
+            bool beyondChart = z.dir == 1 ? close < z.bot : close > z.top
+            // A manually selected equal/lower slot has no reliable nested HTF close here;
+            // preserve chart-close invalidation rather than keep an unconfirmable box.
+            int slotSeconds = z.slot == 1 ? zSec1 : z.slot == 2 ? zSec2 : z.slot == 3 ? zSec3 : 0
+            if iZInvalid == "Hybrid (HTF close)" and z.slot > 0 and slotSeconds > cs
+                bool rolled = z.slot == 1 ? k15 != k15[1] : z.slot == 2 ? k60 != k60[1] : k240 != k240[1]
+                float htfClose = z.slot == 1 ? zClose1 : z.slot == 2 ? zClose2 : zClose3
+                bool beyondHtf = z.dir == 1 ? htfClose < z.bot : htfClose > z.top
+                if rolled and not na(htfClose) and beyondHtf
+                    zs.remove(i)
+                else
+                    // Only a confirmed source-TF reclaim can clear the pending state.
+                    if rolled and not na(htfClose)
+                        z.breached := false
+                    if beyondChart
+                        if not z.breached
+                            z.tapB := -1
+                        z.breached := true
+            else if beyondChart
                 zs.remove(i)
         // taps: price trading into a gap that still holds (session map)
         for z in zs
-            if low <= z.top and high >= z.bot
+            if not z.breached and low <= z.top and high >= z.bot
                 z.tapB := bar_index
                 // how deep price has filled the gap: from the top down for FVG+, from the bottom up for FVG-
                 if z.dir == 1
@@ -2146,11 +2184,15 @@ if barstate.islast
         array<int> zUsed = array.new<int>()
         // the gaps price is trading inside (max 2): where it delivers from now
         int nIn = 0
-        for i = 0 to zs.size() - 1
-            Zn z = zs.get(i)
-            if iZIn and nIn < 2 and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
-                zUsed.push(i)
-                nIn += 1
+        if iZIn
+            // When several gaps contain price, show pending breaches first: their dashed
+            // label explains why a visible HTF FVG earns no delivery credit.
+            for pass = 0 to 1
+                for i = 0 to zs.size() - 1
+                    Zn z = zs.get(i)
+                    if nIn < 2 and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
+                        zUsed.push(i)
+                        nIn += 1
         // then the nearest ones above and below
         for side = 0 to 1
             for pass = 1 to iZN
@@ -2171,21 +2213,21 @@ if barstate.islast
             // unfilled part only
             float zT = z.top
             float zB = z.bot
-            if iZTrim and not na(z.mit)
+            if iZTrim and not z.breached and not na(z.mit)
                 if z.dir == 1
                     zT := math.min(z.top, z.mit)
                 else
                     zB := math.max(z.bot, z.mit)
-            if zT - zB >= 2 * syminfo.mintick and f_fill(z) < iFillMax
+            if (z.breached or (zT - zB >= 2 * syminfo.mintick and f_fill(z) < iFillMax))
                 int zX1 = math.max(z.t0, time - iZBack * cs * 1000)
                 int zX2 = time + 15 * cs * 1000
-                string zTx = str.upper(z.tf) + " FVG" + (z.dir == 1 ? "+" : "-")
+                string zTx = str.upper(z.tf) + " FVG" + (z.dir == 1 ? "+" : "-") + (z.breached ? " · BREACHED · WAIT " + str.upper(z.tf) + " CLOSE" : "")
                 if iZst == "Edges only"
-                    dLn.push(line.new(zX1, zT, zX2, zT, xloc = xloc.bar_time, color = color.new(lc, 55)))
-                    dLn.push(line.new(zX1, zB, zX2, zB, xloc = xloc.bar_time, color = color.new(lc, 55)))
+                    dLn.push(line.new(zX1, zT, zX2, zT, xloc = xloc.bar_time, color = color.new(lc, 55), style = z.breached ? line.style_dashed : line.style_solid))
+                    dLn.push(line.new(zX1, zB, zX2, zB, xloc = xloc.bar_time, color = color.new(lc, 55), style = z.breached ? line.style_dashed : line.style_solid))
                     dBx.push(box.new(zX1, zT, zX2, zB, xloc = xloc.bar_time, border_color = color.new(lc, 100), bgcolor = color.new(lc, 100), text = zTx, text_size = size.tiny, text_color = color.new(lc, 35), text_halign = text.align_right, text_valign = text.align_bottom))
                 else
-                    dBx.push(box.new(zX1, zT, zX2, zB, xloc = xloc.bar_time, border_color = iZst == "Tinted" ? color.new(zc, 70) : color.new(lc, 100), border_width = 1, bgcolor = color.new(zc, iZst == "Tinted" ? 93 : 94), text = zTx, text_size = size.tiny, text_color = color.new(zc, iZst == "Tinted" ? 20 : 35), text_halign = text.align_right, text_valign = text.align_bottom))
+                    dBx.push(box.new(zX1, zT, zX2, zB, xloc = xloc.bar_time, border_color = z.breached ? color.new(cNeu, 40) : iZst == "Tinted" ? color.new(zc, 70) : color.new(lc, 100), border_style = z.breached ? line.style_dashed : line.style_solid, border_width = 1, bgcolor = z.breached ? color.new(cNeu, 92) : color.new(zc, iZst == "Tinted" ? 93 : 94), text = zTx, text_size = size.tiny, text_color = color.new(zc, iZst == "Tinted" ? 20 : 35), text_halign = text.align_right, text_valign = text.align_bottom))
 
 // ───────── session map (rulebook section 3)
 if barstate.islast and iMap
@@ -2194,7 +2236,7 @@ if barstate.islast and iMap
     Zn up = na
     Zn dn = na
     for z in zs
-        if z.tf != "5m"
+        if z.tf != "5m" and not z.breached
             if z.tapB >= 0 and (na(rz) or z.tapB > rz.tapB)
                 rz := z
             if z.dir == -1 and z.bot > close and (na(up) or z.bot < up.bot)
@@ -2240,7 +2282,7 @@ if barstate.islast and iMap
     bool inZ = false
     if dd != 0
         for z in zs
-            if z.tf != "5m" and z.dir == dd
+            if z.tf != "5m" and not z.breached and z.dir == dd
                 if close <= z.top + 0.25 * atr and close >= z.bot - 0.25 * atr
                     dz := z
                     inZ := true
