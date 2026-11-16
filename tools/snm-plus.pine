@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.48", shorttitle = "SNM+", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.48", shorttitle = "SNM+ 3.48", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"

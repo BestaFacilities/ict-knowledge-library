@@ -2,7 +2,16 @@
 
 # SNM+ 3.48 — first integration pass
 
-**Current source:** `tools/snm-plus.pine`. The author's exact uploaded 3.47 baseline (before any edits) is `tools/archive/snm-plus-3.47.pristine.txt`, SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`. The uploaded file began with comments; only the working version moves `//@version=6` to literal line 1. The working version was renamed 3.48 so TradingView cannot silently show a stale 3.47 instance. Remove the old instance, paste the new code, save and re-add it.
+**Current source:** `tools/snm-plus.pine`. The author's exact uploaded 3.47 baseline (before any edits) is `tools/archive/snm-plus-3.47.pristine.txt`, SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`. The uploaded file began with comments; only the working version moves `//@version=6` to literal line 1. The working version is named and short-titled **SNM+ 3.48** so the chart legend can distinguish it from your old instance.
+
+## Install it first — it is not published in TradingView
+
+This repository file does **not** install itself into TradingView. The GitHub default branch (`master`) also does not contain it yet; the file is on branch `arena/1ccc44fe-ict-knowledge-library`.
+
+1. Open `tools/snm-plus.pine` in the workspace viewer, or on GitHub select that branch and open `tools/snm-plus.pine` (not the archived `.txt`). Copy the **entire file**, beginning with `//@version=6`.
+2. In TradingView open a chart → **Pine Editor** (bottom tab) → **New / Blank indicator**. Select all the placeholder code, paste 3.48, click **Save** (name it `SNM+ 3.48`), then **Add to chart**.
+3. Remove the older SNM+ 3.47 indicator instance from the chart to avoid overlapping drawings. The chart legend should say **SNM+ 3.48**. Only then open its **gear → Inputs** for the new settings below. If the legend says just `SNM+`, you are still looking at 3.47.
+4. If TradingView reports a compiler or resource error, send the exact message and line number before trusting any chart output. This repo's checker is not TradingView's server compiler.
 
 ## What the core still does
 
