@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.49 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.50 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.49", shorttitle = "SNM+ 3.49", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.50", shorttitle = "SNM+ 3.50", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -109,6 +109,14 @@ bool iSmtOn = input.bool(true, "SMT with ES / NQ", group = G_C)
 string iPairMode = input.string("Auto", "SMT sibling", options = ["Auto", "Manual"], group = G_C, tooltip = "Auto keeps SNM+ 3.47's NQ/ES and MNQ/MES pairing. Manual permits another symbol; if the feed has no data, SMT/ES checks will be unavailable, not silently treated as confirmed.")
 string iManualPair = input.symbol("CME_MINI:ES1!", "Manual SMT symbol", group = G_C, tooltip = "Only used when SMT sibling = Manual. For gold, choose the exact correlated feed available on your TradingView account; an invalid feed cannot validate SMT.")
 string iTtSel = input.string("Auto", "Fractal pairing (HTF candle)", options = ["Auto", "15", "30", "60", "240"], group = G_C, tooltip = "TTrades Fractal Model: the higher timeframe candle your entry chart trades inside. Auto: 1m → 15m, 3m → 30m, 5m → 1H, 15m → 4H. used for the C2 / C3 closure check, PSP, entry timing and time exits")
+const string G_HC = "HTF CISD confluence"
+bool iHCOn = input.bool(false, "Enable confirmed HTF CISD context", group = G_HC, tooltip = "Information only; never creates a setup, changes the four-point confluence score, grade, targets, bias, or alerts. Uses the previous closed HTF candle only. Default off preserves 3.49 tags.")
+bool iHCDraw = input.bool(true, "Draw confirmed HTF CISD lines", group = G_HC, tooltip = "Only used when context is enabled; the line is dotted, never a provisional live-candle level. Off keeps the tooltip context without extra drawings.")
+string iHCMode = input.string("Auto", "HTF CISD timeframes", options = ["Auto", "Manual"], group = G_HC, tooltip = "Auto: 1m→2m/3m; 3m→5m/15m; 5m→15m/30m; 15m→1H/4H. Manual uses the two inputs below. TFs equal to or below the chart are skipped.")
+string iHCTF1 = input.timeframe("2", "Manual HTF 1", group = G_HC)
+string iHCTF2 = input.timeframe("3", "Manual HTF 2", group = G_HC)
+int iHCFresh = input.int(60, "Context valid for (minutes)", minval = 5, maxval = 240, group = G_HC, tooltip = "Freshness from the confirmed HTF candle's actual close, including across market gaps. Applies to tooltip context and current line extension.")
+int iHCKeep = input.int(4, "Confirmed lines kept total", minval = 1, maxval = 12, group = G_HC, tooltip = "Global cap across both timeframes and directions; old labels and lines are deleted when this cap is reached.")
 const string G_T = "HTF candles (TTrades view)"
 bool iTtView = input.bool(true, "Show the HTF candles on the right", group = G_T, tooltip = "the last 3 closed HTF candles + the one forming, at real prices, to the right of the chart. the pairing (15m on 1m…) is set in Confluence")
 int iTtX = input.int(50, "Start (candles right of the last bar)", minval = 20, maxval = 300, group = G_T)
@@ -260,6 +268,14 @@ type SigKey
     int signalB
     string model
 
+type HcEvent
+    int d
+    float level
+    string tf
+    int confirmedT
+    line ln
+    label lb
+
 type Tr
     int d
     float en
@@ -390,6 +406,8 @@ f_zName(string tf) =>
 string zNm1 = f_zName(zTF1)
 string zNm2 = f_zName(zTF2)
 string zNm3 = f_zName(zTF3)
+string hcTF1 = iHCMode == "Auto" ? (cm <= 1 ? "2" : cm <= 3 ? "5" : cm <= 5 ? "15" : cm <= 15 ? "60" : cm <= 60 ? "240" : "D") : iHCTF1
+string hcTF2 = iHCMode == "Auto" ? (cm <= 1 ? "3" : cm <= 3 ? "15" : cm <= 5 ? "30" : cm <= 15 ? "240" : cm <= 60 ? "D" : "W") : iHCTF2
 // Rank by the actual selected timeframe, not by a hard-coded label: a 45m / 3H manual
 // slot must not silently become a 4H+ reversal-delivery zone.
 f_zRank(string tf) =>
@@ -412,6 +430,29 @@ f_zf() =>
 string ttTf = iTtSel == "Auto" ? (cm <= 1 ? "15" : cm <= 3 ? "30" : cm <= 5 ? "60" : "240") : iTtSel
 string ttNm = ttTf == "15" ? "15m" : ttTf == "30" ? "30m" : ttTf == "60" ? "1H" : "4H"
 int ttSec = timeframe.in_seconds(ttTf)
+// Original HTF candle-leg-open CISD: a run's first opposite candle sets the level;
+// a later close through that open confirms it. No sweep or lower-TF entry is inferred.
+// bull[1]/bear[1] are from the LAST CLOSED HTF candle. `time` marks turnover to
+// the NEW HTF candle (dedup key); time_close[1] is the confirmed candle's actual
+// close for freshness across overnight/weekend gaps.
+f_hcEvent() =>
+    var float downOpen = na
+    var float upOpen = na
+    if close < open and not (close[1] < open[1])
+        downOpen := open
+    if close > open and not (close[1] > open[1])
+        upOpen := open
+    float bull = na
+    float bear = na
+    if not na(downOpen) and close > downOpen and close[1] <= downOpen
+        bull := downOpen
+        downOpen := na
+    if not na(upOpen) and close < upOpen and close[1] >= upOpen
+        bear := upOpen
+        upOpen := na
+    [bull[1], bear[1], time, time_close[1]]
+[hcB1, hcS1, hcT1, hcClose1] = request.security(syminfo.tickerid, hcTF1, f_hcEvent(), lookahead = barmerge.lookahead_on)
+[hcB2, hcS2, hcT2, hcClose2] = request.security(syminfo.tickerid, hcTF2, f_hcEvent(), lookahead = barmerge.lookahead_on)
 f_tt() =>
     [open[1], high[1], low[1], close[1], open[2], high[2], low[2], close[2], time, open]
 [c2o, c2h, c2l, c2c, c1o, c1h, c1l, c1c, htT0, htO] = request.security(syminfo.tickerid, ttTf, f_tt(), lookahead = barmerge.lookahead_on)
@@ -510,6 +551,7 @@ var Sw swS = Sw.new()
 var Sw swL = Sw.new()
 var Ui ui = Ui.new()
 var array<Tr> trs = array.new<Tr>()
+var array<HcEvent> hcEvents = array.new<HcEvent>()
 var array<SigKey> sigKeys = array.new<SigKey>()
 var array<int> dedupBars = array.new_int()
 var array<Zn> zsE = array.new<Zn>()
@@ -728,6 +770,29 @@ f_stFade(St st, bool hide) =>
             label.set_textcolor(lab, color.new(cNeu, tr))
             if hide
                 label.set_text(lab, "")
+    true
+
+f_hcAdd(int d, float level, string tf, int confirmedT) =>
+    if not na(level) and not na(confirmedT)
+        bool dup = false
+        for ev in hcEvents
+            if ev.d == d and ev.tf == tf and ev.confirmedT == confirmedT
+                dup := true
+                break
+        if not dup
+            line l = na
+            label lab = na
+            if iHCDraw
+                color col = d == 1 ? iLong : iShort
+                l := line.new(bar_index, level, bar_index + 8, level, color = color.new(col, 40), style = line.style_dotted)
+                lab := label.new(bar_index + 8, level, f_zName(tf) + " CISD" + (d == 1 ? "+" : "-"), style = label.style_label_left, color = color.new(col, 100), textcolor = col, size = size.tiny, tooltip = "Confirmed " + f_zName(tf) + " CISD at " + f_prc(level) + " · context only, not a setup or grade point")
+            hcEvents.push(HcEvent.new(d, level, tf, confirmedT, l, lab))
+            while hcEvents.size() > iHCKeep
+                HcEvent old = hcEvents.shift()
+                if not na(old.ln)
+                    line.delete(old.ln)
+                if not na(old.lb)
+                    label.delete(old.lb)
     true
 
 f_stDel(St st) =>
@@ -1237,6 +1302,13 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
     // TTFM filter: no HTF C2 / C3 closure in this direction
     if iTtF != "Off" and not ttOk and gN > 0
         gN := iTtF == "Strict" ? 0 : gN == 3 ? 1 : gN - 1
+    bool hcOk = false
+    string hcWhich = ""
+    if iHCOn
+        for ev in hcEvents
+            if ev.d == d and ev.confirmedT <= time_close and time_close - ev.confirmedT <= iHCFresh * 60000
+                hcOk := true
+                hcWhich := f_zName(ev.tf) + " CISD" + (d == 1 ? "+" : "-") + " " + f_prc(ev.level)
     int conf = (ttOk ? 1 : 0) + (cisd ? 1 : 0) + (div ? 1 : 0) + (smtP ? 1 : 0)
     float triggerPx = isL ? g.top : g.bot
     bool duplicate = f_isDuplicate(d, triggerPx, s.b0, mdl)
@@ -1287,6 +1359,8 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         tip += "\n" + f_ck(tsOk) + (tsOk ? "wick formed in the " + ttNm + " T-Spot " + f_prc(tsBot) + " – " + f_prc(tsTop) : tsDir == d ? "wick outside the " + ttNm + " T-Spot " + f_prc(tsBot) + " – " + f_prc(tsTop) : "no " + ttNm + " T-Spot in this direction")
         tip += "\n" + f_ck(cisd) + "CISD" + (na(cLvl) ? "" : " · " + f_prc(cLvl))
         tip += "\n" + f_ck(div) + "volume divergence"
+        if iHCOn
+            tip += "\n" + (hcOk ? "✔ " + hcWhich : "– no fresh confirmed HTF CISD") + " (context only; not part of grade)"
         tip += "\n" + f_ck(smtP) + "SMT / PSP" + (smtOn ? " with " + pairRoot + (smt ? " · SMT" : "") + (psp ? " · PSP (the " + ttNm + " C2 closed " + (c2c > c2o ? "bullish" : "bearish") + ", " + pairRoot + " " + (pc2c > pc2o ? "bullish" : "bearish") + ")" : "") : " (off)")
         tip += "\n\n" + (mdl == "C" ? "C · continuation (with the " + iMsTf + " structure)" : mdl == "RB" ? "RB · rebalance to the 5m / 15m FVG left on the move (against the " + iMsTf + " structure) · runner = TP2" : mdl == "RV" ? "RV · reversal to the HTF draw (against the " + iMsTf + " structure)" + (inMacro ? " · in the macro" : " · usually inside the 10am macro") : "? · structure not set yet")
         if rBad
@@ -1358,6 +1432,8 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         tipS += dol ? "\nTP1 " + f_prc(tp) + " · " + tpN + " · " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "\nno TP1 draw"
         tipS += (na(beP) ? "" : "\nBE at " + f_prc(beP)) + (na(tp2) ? "" : "\nTP2 " + f_prc(tp2) + " (" + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R)")
         tipS += miss2 == "" ? "\n\n✔ every check passed" : "\n" + miss2
+        if iHCOn
+            tipS += "\nHTF CISD: " + (hcOk ? hcWhich : "none fresh") + " (info only)"
         tipS += "\n\nswept: " + s.dt
         if iDet == "Simple"
             tip := tipS
@@ -1479,6 +1555,19 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
 // only the recent history is calculated: much faster loading
 bool calc = time >= last_bar_time - iDays * 86400000
 if barstate.isconfirmed and calc
+    // Register only completed HTF events: the requested tuple carries the prior candle's
+    // CISD on the first chart bar of the next HTF candle. No live HTF close is consulted.
+    if iHCOn
+        if timeframe.in_seconds(hcTF1) > cs and hcT1 != hcT1[1]
+            if not na(hcB1) and not na(hcClose1) and time_close >= hcClose1 and time_close - hcClose1 <= iHCFresh * 60000
+                f_hcAdd(1, hcB1, hcTF1, hcClose1)
+            if not na(hcS1) and not na(hcClose1) and time_close >= hcClose1 and time_close - hcClose1 <= iHCFresh * 60000
+                f_hcAdd(-1, hcS1, hcTF1, hcClose1)
+        if timeframe.in_seconds(hcTF2) > cs and hcTF2 != hcTF1 and hcT2 != hcT2[1]
+            if not na(hcB2) and not na(hcClose2) and time_close >= hcClose2 and time_close - hcClose2 <= iHCFresh * 60000
+                f_hcAdd(1, hcB2, hcTF2, hcClose2)
+            if not na(hcS2) and not na(hcClose2) and time_close >= hcClose2 and time_close - hcClose2 <= iHCFresh * 60000
+                f_hcAdd(-1, hcS2, hcTF2, hcClose2)
     if newDay
         ui.nAp := 0
         ui.nA := 0
@@ -1832,6 +1921,14 @@ var int armS = -1
 var int armL = -1
 var int formB = -1
 if barstate.islast
+    if iHCOn and iHCDraw
+        int hcNow = barstate.isrealtime ? timenow : time_close
+        for ev in hcEvents
+            if hcNow >= ev.confirmedT and hcNow - ev.confirmedT <= iHCFresh * 60000
+                if not na(ev.ln)
+                    line.set_x2(ev.ln, bar_index + 8)
+                if not na(ev.lb)
+                    label.set_x(ev.lb, bar_index + 8)
     for l in pLn
         l.delete()
     for l in pLb
