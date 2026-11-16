@@ -97,6 +97,10 @@ PROBES = {
     "mx-context-overlay.pine": ['plot(array.size(aTop), "arrs")', 'plot(array.size(pPx), "pools")',
                                  'plot(box.count(), "boxes")', 'plot(label.count(), "labels")',
                                  'plot(invSeen, "inverted")'],
+    "snm-plus.pine": ['plot(array.size(sigKeys), "sigKeys")',
+                       'plot(array.size(dedupBars), "dedupFired")',
+                       'plot(line.count(), "lines")', 'plot(box.count(), "boxes")',
+                       'plot(label.count(), "labels")'],
     "mx-replica.pine": ['plot(sweepCt, "sweeps")', 'plot(invCt, "inversions")',
                          'plot(sigR, "sigR")', 'plot(sigC, "sigC")', 'plot(eqCt, "eqCt")',
                          'plot(smtCt, "smtCt")', 'plot(array.size(lvY), "lvls")',
@@ -184,6 +188,18 @@ FORCE = [('crtOn       = input.bool(false,', 'crtOn       = input.bool(true,'),
          ('crtMinRiskT = input.int(10,', 'crtMinRiskT = input.int(0,')]
 
 EXERCISES = {
+    "snm-plus.pine": [
+        # Synthetic bars are contiguous and daily: no organic intraday sweeps/iFVGs.
+        # Inject two same-sweep confirmations through the shipped f_setup code. The
+        # first must be stored, and the second must fire the dedup suppression branch.
+        # This tests plumbing, not real-world signal frequency.
+        ("SNM near-duplicate same-sweep confirmation",
+         [('bool iProx = input.bool(false,', 'bool iProx = input.bool(true,'),
+          ('string iMinG = input.string("A",', 'string iMinG = input.string("B",'),
+          ('if barstate.isconfirmed and ui.alMsg != ""',
+           'if bar_index == 200\n    Sw gs = Sw.new()\n    gs.on := true\n    gs.ext := close - 10.0\n    gs.extB := bar_index - 1\n    gs.b0 := bar_index - 2\n    gs.key := true\n    gs.lvB := -1\n    gs.nm := "gate"\n    gs.dt := "gate sweep"\n    Gp gg = Gp.new(false, close - 1.0, close - 2.0, time, bar_index - 1, "1m", 1)\n    Gp gp = na\n    f_setup(1, gg, gs, gp, false)\n    f_setup(1, gg, gs, gp, false)\nif barstate.isconfirmed and ui.alMsg != ""')],
+         ["sigKeys", "dedupFired"]),
+    ],
     "cisd-ultimate-balanced.pine": [
         ("crt daily reference",
          FORCE + [('crtRef      = input.string("Prev 4H candle",',

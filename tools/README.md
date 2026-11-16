@@ -1,14 +1,16 @@
-// NOT PINE CODE — workspace map for SNM+ 3.47 (André Wonou), whose source was shared in chat but has not yet been added as a .pine file.
+// NOT PINE CODE — workspace map for tools/snm-plus.pine (SNM+ 3.48, based on André Wonou's uploaded 3.47).
 
 # Indicator workspace — SNM+ is the current project
 
-The **current baseline is the user's SNM+ 3.47**, not the older CISD or ManipulationX experiments. Its complete source was pasted in the conversation; **there is no SNM+ `.pine` file in this checkout yet**. Do not mistake one of the archived scripts for the current indicator. Before modifying SNM+, save the exact uploaded source under `tools/archive/snm-plus-3.47.pristine.txt` and make a working copy at `tools/snm-plus.pine`. The pasted script places comments before `//@version=6`; move that directive to literal line 1 **only in the working `.pine` copy**, then compile it. Keep the pristine upload byte-identical so this normalization is auditable.
+The **working script is `tools/snm-plus.pine` (3.48)**; the exact uploaded 3.47 source is `tools/archive/snm-plus-3.47.pristine.txt` (SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`). Before the first integration pass, only `//@version=6` was moved to literal line 1; 3.48 now adds opt-in controls. Do not mistake an archived predecessor for the active indicator.
 
 ## Here now
 
 | Path | Purpose |
 |---|---|
-| `snm-integration-plan.md` | Feature-by-feature comparison of SNM+ against the CISD Model+ reference sent by the user; safe candidates, known defects not to import, and verification plan. This is a plan, **not** an implemented merge. |
+| `snm-plus.pine` | Active 3.48 indicator: 3.47 baseline plus default-preserving SMT symbol override, alert controls and same-sweep dedup switch. |
+| `snm-plus-guide.md`, `snm-settings-by-pair.md` | Current usage and maintained pair/timeframe settings; update with input changes. |
+| `snm-integration-plan.md` | Feature-by-feature CISD Model+ comparison, shipped first pass and deferred experimental candidates. |
 | `archive/legacy-indicators/` | Earlier CISD/CRT and ManipulationX scripts, studies, guides, settings matrix, and scale-table helper, moved here unchanged for retrieval. See its README. |
 | `archive/` | Earlier archived indicator revisions, also retained unchanged. |
 | `pine-lint.sh`, `pine-validate.py`, `pine-gate-run.py`, `tests/` | Pine compiler/validator/runtime smoke tests. These remain accessible at their original paths. Gate harness keys legacy exercises by filename, so pass the archived file path explicitly. |
@@ -16,11 +18,11 @@ The **current baseline is the user's SNM+ 3.47**, not the older CISD or Manipula
 
 The GitHub repository remains **active**. Only files in the current branch have been reorganized; its history and `master` have not been deleted, rewritten, or archived. Old guides' historical `tools/…` links still describe their original checkout paths; use the archive mapping instead. Do not edit frozen originals to disguise that change.
 
-## Next work, when the baseline file arrives
+## Next work, now that the baseline file is present
 
-1. Capture the pasted SNM+ 3.47 source byte-for-byte as a pristine `.txt`, normalize only the working `.pine` copy's version directive to literal line 1, and verify that copy with the real Pine compiler, AST validator (including its must-fire control), and runtime gate where supported. Record limitations explicitly; do not claim the pasted code was compiled before it was made available as a file.
-2. Apply the approved portable features from `snm-integration-plan.md` as **optional switches** in SNM+ rather than transplanting the other indicator wholesale. Preserve SNM+'s DTE grade scale, model names, colours, object budget, and default signal semantics unless a correction is demonstrated.
-3. Create/update a SNM+ usage guide and pair/timeframe settings matrix in the **same commit** as input or default changes. No per-timeframe manual retuning required by default.
-4. Re-run the gates with positive-fire controls for the new branches; inspect side-by-side TradingView charts for non-repainting and chart readability.
+1. Baseline captured: v6 compiler passed (22 warnings); pyne parser and raw 400-bar run succeeded. The AST validator's 12 false ARITY findings on omitted Pine-default parameters were removed by spelling out those defaults in the working copy. The pristine upload remains untouched.
+2. First pass: optional SMT manual symbol, alert categories/windows, and same-sweep near-duplicate filter are in `snm-plus.pine`, all defaulting to 3.47 behaviour. See `snm-plus-guide.md` and `snm-settings-by-pair.md` for usage and defaults.
+3. The pyne object-mode runtime produces **no plot probes** for SNM+, so the `pine-gate-run.py` exercise correctly fails its must-fire requirement. Do not interpret the parser or raw run as a dynamic signal test. Next verify the toggle-on/off controls on TradingView/replay and pursue a runtime capable of exposing SNM+'s UDT/array state.
+4. Consider the remaining opt-in features from `snm-integration-plan.md` only after comparison on charts; update the guide/matrix in the **same commit** as future input changes. No per-timeframe manual retuning required by default.
 
 To test a legacy file after restoring the required external tooling, pass its explicit path, e.g. `python3 tools/pine-gate-run.py tools/archive/legacy-indicators/mx-replica.pine`. The gate script's paths in old comments/examples are historical, not instructions to use the archived script as the active project.
