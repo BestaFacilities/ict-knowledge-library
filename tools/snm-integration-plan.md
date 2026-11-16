@@ -33,7 +33,7 @@
 
 ## Proposed implementation sequence (after the exact SNM+ file is attached)
 
-1. Baseline preservation: save `tools/snm-plus.pine`, copy the pristine input into `tools/archive/snm-plus-3.47.pristine.pine`, confirm both SHA-256 hashes match, compile and run initial gates. Pin a *no new feature* benchmark.
+1. Baseline preservation: save the exact upload as `tools/archive/snm-plus-3.47.pristine.txt` and its SHA-256. The pasted source has comments *before* `//@version=6`; create `tools/snm-plus.pine` by moving only that directive to literal line 1 (required for shipped scripts), record that one-line relocation in the guide, then compile and run initial gates. Do not claim the two files have identical hashes. Pin a *no new feature* benchmark.
 2. Add optional, independent utility changes: timeframe auto/manual selection; alert categories/windows; manual correlated symbol + SMT sensitivity. Update the SNM+ settings guide/matrix in the same commit; test that turning display off does not turn computation off.
 3. Add optional invalidation/proximity *display* controls, with positive-fire tests for both and preserved historical event records. Verify the default picture matches baseline.
 4. Add optional alternate CISD/HTF CISD confluence behind separate toggles and distinct tags. Test close-only confirmation, expiry, dedup, replays and MTF last-closed values. The CTF-FVG-without-sweep route remains experimental and default off pending side-by-side examples.

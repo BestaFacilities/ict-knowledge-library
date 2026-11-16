@@ -2,7 +2,7 @@
 
 # Indicator workspace — SNM+ is the current project
 
-The **current baseline is the user's SNM+ 3.47**, not the older CISD or ManipulationX experiments. Its complete source was pasted in the conversation; **there is no SNM+ `.pine` file in this checkout yet**. Do not mistake one of the archived scripts for the current indicator. Before modifying SNM+, add the *exact* baseline as `tools/snm-plus.pine` (a file upload is preferable to retyping the long paste), verify its first line is `//@version=6`, and compile it. Keep a pristine snapshot in `tools/archive/` when the baseline is added.
+The **current baseline is the user's SNM+ 3.47**, not the older CISD or ManipulationX experiments. Its complete source was pasted in the conversation; **there is no SNM+ `.pine` file in this checkout yet**. Do not mistake one of the archived scripts for the current indicator. Before modifying SNM+, save the exact uploaded source under `tools/archive/snm-plus-3.47.pristine.txt` and make a working copy at `tools/snm-plus.pine`. The pasted script places comments before `//@version=6`; move that directive to literal line 1 **only in the working `.pine` copy**, then compile it. Keep the pristine upload byte-identical so this normalization is auditable.
 
 ## Here now
 
@@ -18,7 +18,7 @@ The GitHub repository remains **active**. Only files in the current branch have 
 
 ## Next work, when the baseline file arrives
 
-1. Capture SNM+ 3.47 byte-for-byte and verify it with the real Pine compiler, AST validator (including its must-fire control), and runtime gate where supported. Record limitations explicitly; do not claim the pasted code was compiled before it was made available as a file.
+1. Capture the pasted SNM+ 3.47 source byte-for-byte as a pristine `.txt`, normalize only the working `.pine` copy's version directive to literal line 1, and verify that copy with the real Pine compiler, AST validator (including its must-fire control), and runtime gate where supported. Record limitations explicitly; do not claim the pasted code was compiled before it was made available as a file.
 2. Apply the approved portable features from `snm-integration-plan.md` as **optional switches** in SNM+ rather than transplanting the other indicator wholesale. Preserve SNM+'s DTE grade scale, model names, colours, object budget, and default signal semantics unless a correction is demonstrated.
 3. Create/update a SNM+ usage guide and pair/timeframe settings matrix in the **same commit** as input or default changes. No per-timeframe manual retuning required by default.
 4. Re-run the gates with positive-fire controls for the new branches; inspect side-by-side TradingView charts for non-repainting and chart readability.
