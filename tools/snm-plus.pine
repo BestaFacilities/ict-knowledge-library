@@ -331,7 +331,7 @@ string pTk = pairConfigured ? pairSym : syminfo.tickerid
 bool smtOn = pairConfigured and not na(oH) and not na(oL)
 bool esBu = smtOn and not na(oL) and not na(oH[2]) and oL > oH[2]
 bool esBe = smtOn and not na(oH) and not na(oL[2]) and oH < oL[2]
-float eqTolP = pairRoot == "ES" or pairRoot == "MES" ? 1.0 : 4.0
+float eqTolP = str.startswith(pairRoot, "ES") or str.startswith(pairRoot, "MES") ? 1.0 : 4.0
 
 [pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
 [pwh, pwl] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
