@@ -1,14 +1,14 @@
-// NOT PINE CODE — workspace map for tools/snm-plus.pine (SNM+ 3.48, based on André Wonou's uploaded 3.47).
+// NOT PINE CODE — workspace map for tools/snm-plus.pine (SNM+ 3.49, based on André Wonou's uploaded 3.47).
 
 # Indicator workspace — SNM+ is the current project
 
-The **working script is `tools/snm-plus.pine` (3.48)**; the exact uploaded 3.47 source is `tools/archive/snm-plus-3.47.pristine.txt` (SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`). Before the first integration pass, only `//@version=6` was moved to literal line 1; 3.48 now adds opt-in controls. Do not mistake an archived predecessor for the active indicator.
+The **working script is `tools/snm-plus.pine` (3.49)**; the exact uploaded 3.47 source is `tools/archive/snm-plus-3.47.pristine.txt` (SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`). Before the first integration pass, only `//@version=6` was moved to literal line 1; 3.48 added the first opt-in controls; 3.49 adds the optional Auto gap ladder and stop-based drawing controls. Do not mistake an archived predecessor for the active indicator.
 
 ## Here now
 
 | Path | Purpose |
 |---|---|
-| `snm-plus.pine` | Active 3.48 indicator: 3.47 baseline plus default-preserving SMT symbol override, alert controls and same-sweep dedup switch. |
+| `snm-plus.pine` | Active 3.49 indicator: 3.47 baseline plus default-preserving SMT symbol override, alert controls, same-sweep dedup, optional Auto gap ladder, and stop-based Dim/Hide drawings. |
 | `snm-plus-guide.md`, `snm-settings-by-pair.md` | Current usage and maintained pair/timeframe settings; update with input changes. |
 | `snm-integration-plan.md` | Feature-by-feature CISD Model+ comparison, shipped first pass and deferred experimental candidates. |
 | `archive/legacy-indicators/` | Earlier CISD/CRT and ManipulationX scripts, studies, guides, settings matrix, and scale-table helper, moved here unchanged for retrieval. See its README. |
@@ -21,7 +21,7 @@ The GitHub repository remains **active**. Only files in the current branch have 
 ## Next work, now that the baseline file is present
 
 1. Baseline captured: v6 compiler passed (22 warnings); pyne parser and raw 400-bar run succeeded. The AST validator's 12 false ARITY findings on omitted Pine-default parameters were removed by spelling out those defaults in the working copy. The pristine upload remains untouched.
-2. First pass: optional SMT manual symbol, alert categories/windows, and same-sweep near-duplicate filter are in `snm-plus.pine`, all defaulting to 3.47 behaviour. See `snm-plus-guide.md` and `snm-settings-by-pair.md` for usage and defaults.
+2. First two passes: manual SMT symbol, alert categories/windows, same-sweep dedup, optional Auto gap timeframe ladder, and stop-based Dim/Hide drawing controls are in `snm-plus.pine`; Fixed/Keep defaults preserve 3.47 behaviour. See `snm-plus-guide.md` and `snm-settings-by-pair.md` for usage and defaults.
 3. The pyne object-mode runtime produces **no plot probes** for SNM+, so the `pine-gate-run.py` exercise correctly fails its must-fire requirement. Do not interpret the parser or raw run as a dynamic signal test. Next verify the toggle-on/off controls on TradingView/replay and pursue a runtime capable of exposing SNM+'s UDT/array state.
 4. Consider the remaining opt-in features from `snm-integration-plan.md` only after comparison on charts; update the guide/matrix in the **same commit** as future input changes. No per-timeframe manual retuning required by default.
 

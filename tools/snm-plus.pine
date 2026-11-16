@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.48 — André Wonou; 3.47 baseline plus optional CISD Model+ integration (first pass)
+// SNM+ 3.49 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.48", shorttitle = "SNM+ 3.48", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.49", shorttitle = "SNM+ 3.49", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -92,11 +92,15 @@ string iNewsList = input.string("", "Other releases (NY): yyyy-mm-dd hhmm, ...",
 int iNewsBef = input.int(10, "Blackout before (min)", minval = 0, inline = "nw", group = G_C)
 int iNewsAft = input.int(15, "after (min)", minval = 0, inline = "nw", group = G_C)
 bool iNewsBg = input.bool(true, "Shade the blackout", group = G_C)
+string iZMode = input.string("Fixed", "HTF gap timeframe mode", options = ["Fixed", "Auto"], group = G_C, tooltip = "Fixed preserves the 3.48 15m/1H/4H delivery slots. Auto selects three strictly higher TFs from the entry chart (1m/3m → 15m/1H/4H, 5m/15m → 1H/4H/1D). This changes delivery and available targets only when enabled.")
+string iZTF1 = input.timeframe("15", "Fixed gap TF 1", group = G_C)
+string iZTF2 = input.timeframe("60", "Fixed gap TF 2", group = G_C)
+string iZTF3 = input.timeframe("240", "Fixed gap TF 3", group = G_C)
 bool iZ5 = input.bool(true, "5m (sponsored)", inline = "h", group = G_C)
-bool iZ15 = input.bool(true, "15m", inline = "h", group = G_C)
-bool iZ60 = input.bool(true, "1H", inline = "h", group = G_C)
-bool iZ240 = input.bool(true, "4H", inline = "h", group = G_C, tooltip = "higher timeframe gaps for the delivery check and as draws")
-bool iZShow = input.bool(true, "Draw HTF gaps (15m / 1H / 4H)", inline = "zs", group = G_C, tooltip = "ManipulationX style: the gaps price is in, plus the nearest above and below, drawn from the candle that made them. FVG+ = bullish, FVG- = bearish")
+bool iZ15 = input.bool(true, "Gap slot 1", inline = "h", group = G_C)
+bool iZ60 = input.bool(true, "Gap slot 2", inline = "h", group = G_C)
+bool iZ240 = input.bool(true, "Gap slot 3", inline = "h", group = G_C, tooltip = "All three gap slots feed delivery and draws. Use Fixed for 3.48 defaults or Auto to scale with the chart timeframe.")
+bool iZShow = input.bool(true, "Draw HTF gaps (slots 1–3)", inline = "zs", group = G_C, tooltip = "ManipulationX style: the gaps price is in, plus the nearest above and below, drawn from the candle that made them. FVG+ = bullish, FVG- = bearish")
 int iZN = input.int(2, "per side", minval = 1, maxval = 6, inline = "zs", group = G_C)
 bool iZIn = input.bool(false, "Also the gaps price is trading inside", group = G_C)
 bool iZ5Show = input.bool(false, "Draw 5M gaps too", group = G_C, tooltip = "5M gaps are always used as draws and (when sponsored) as delivery; drawing them adds clutter")
@@ -129,6 +133,8 @@ float iRiskP = input.float(200, "Risk A++ / A+ ($)", minval = 0, group = G_R)
 float iRiskA = input.float(150, "Risk A ($)", minval = 0, group = G_R)
 float iMaxStop = input.float(0, "Max stop (pts)", minval = 0, group = G_R, tooltip = "0 = auto: 75 on NQ / MNQ, 18 on ES / MES. wider stops are flagged, not hidden")
 
+string iInvalidDraw = input.string("Keep", "Drawings after stop", options = ["Keep", "Dim", "Hide"], group = G_D, tooltip = "Display-only: after a confirmed setup's chosen stop is touched on a later bar, keep it, dim its objects or hide them. Does not delete the setup record, change grades, alerts, or the optional outcome tracker. Keep = 3.48 behaviour.")
+string iInvalidTouch = input.string("Wick", "Stop touch means", options = ["Wick", "Close"], group = G_D, tooltip = "For the optional Dim/Hide display only. Wick = price touches the stop intrabar; Close = candle closes strictly through it. Outcome tracking still uses its own conservative wick stop.")
 bool iBe = input.bool(true, "BE line (nearest internal structure)", group = G_D)
 bool iTp2 = input.bool(true, "TP2 line (runner draw)", group = G_D)
 bool iAlOn = input.bool(true, "Enable alerts", group = G_A)
@@ -242,6 +248,10 @@ type St
     array<line> ln
     array<label> tl
     array<label> tc
+    float stopPx = na
+    int dir = 0
+    int madeB = -1
+    bool invalid = false
 
 type SigKey
     int d
@@ -368,22 +378,37 @@ f_ms() =>
     st[1]
 int msSt = request.security(syminfo.tickerid, iMsTf, f_ms(), lookahead = barmerge.lookahead_on)
 
+bool newDay = ta.change(time("D")) != 0
+int cm = math.max(1, int(timeframe.in_seconds() / 60))
+string cTf = str.tostring(cm) + "m"
+string zTF1 = iZMode == "Auto" ? (cm <= 3 ? "15" : cm <= 15 ? "60" : cm <= 60 ? "240" : "D") : iZTF1
+string zTF2 = iZMode == "Auto" ? (cm <= 3 ? "60" : cm <= 15 ? "240" : cm <= 60 ? "D" : "W") : iZTF2
+string zTF3 = iZMode == "Auto" ? (cm <= 3 ? "240" : cm <= 15 ? "D" : cm <= 60 ? "W" : "M") : iZTF3
+f_zName(string tf) =>
+    int secs = timeframe.in_seconds(tf)
+    tf == "D" ? "1D" : tf == "W" ? "1W" : tf == "M" ? "1M" : secs < 3600 ? str.tostring(int(secs / 60)) + "m" : secs < 86400 ? str.tostring(int(secs / 3600)) + "H" : tf
+string zNm1 = f_zName(zTF1)
+string zNm2 = f_zName(zTF2)
+string zNm3 = f_zName(zTF3)
+// Rank by the actual selected timeframe, not by a hard-coded label: a 45m / 3H manual
+// slot must not silently become a 4H+ reversal-delivery zone.
+f_zRank(string tf) =>
+    int secs = tf == zNm1 ? timeframe.in_seconds(zTF1) : tf == zNm2 ? timeframe.in_seconds(zTF2) : tf == zNm3 ? timeframe.in_seconds(zTF3) : 0
+    tf == "5m" ? 1 : secs > 0 and secs < 3600 ? 2 : secs > 0 and secs < 14400 ? 3 : 4
+
 f_zf() =>
     bool bu = low > high[2]
     bool be = high < low[2]
     [bu[1], be[1], high[3], low[1], low[3], high[1], time[3]]
-[u15, e15, ub15, ut15, et15, eb15, k15] = request.security(syminfo.tickerid, "15", f_zf(), lookahead = barmerge.lookahead_on)
-[u60, e60, ub60, ut60, et60, eb60, k60] = request.security(syminfo.tickerid, "60", f_zf(), lookahead = barmerge.lookahead_on)
-[u240, e240, ub240, ut240, et240, eb240, k240] = request.security(syminfo.tickerid, "240", f_zf(), lookahead = barmerge.lookahead_on)
+[u15, e15, ub15, ut15, et15, eb15, k15] = request.security(syminfo.tickerid, zTF1, f_zf(), lookahead = barmerge.lookahead_on)
+[u60, e60, ub60, ut60, et60, eb60, k60] = request.security(syminfo.tickerid, zTF2, f_zf(), lookahead = barmerge.lookahead_on)
+[u240, e240, ub240, ut240, et240, eb240, k240] = request.security(syminfo.tickerid, zTF3, f_zf(), lookahead = barmerge.lookahead_on)
 [u2, e2, ub2, ut2, et2, eb2, k2] = request.security(syminfo.tickerid, "2", f_zf(), lookahead = barmerge.lookahead_on)
 [u3, e3, ub3, ut3, et3, eb3, k3] = request.security(syminfo.tickerid, "3", f_zf(), lookahead = barmerge.lookahead_on)
 [u5, e5, ub5, ut5, et5, eb5, k5] = request.security(syminfo.tickerid, "5", f_zf(), lookahead = barmerge.lookahead_on)
 [fu15, fe15, fub15, fut15, fet15, feb15, fk15] = request.security(pTk, "15", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
 [fu60, fe60, fub60, fut60, fet60, feb60, fk60] = request.security(pTk, "60", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
 [fu240, fe240, fub240, fut240, fet240, feb240, fk240] = request.security(pTk, "240", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
-bool newDay = ta.change(time("D")) != 0
-int cm = math.max(1, int(timeframe.in_seconds() / 60))
-string cTf = str.tostring(cm) + "m"
 string ttTf = iTtSel == "Auto" ? (cm <= 1 ? "15" : cm <= 3 ? "30" : cm <= 5 ? "60" : "240") : iTtSel
 string ttNm = ttTf == "15" ? "15m" : ttTf == "30" ? "30m" : ttTf == "60" ? "1H" : "4H"
 int ttSec = timeframe.in_seconds(ttTf)
@@ -676,6 +701,35 @@ f_swUpd(Sw s, bool hiSide) =>
             s.on := false
     true
 
+// Visual-only invalidation. Keep object IDs intact: the optional outcome tracker still owns
+// the setup label, and deleting it here would break f_trkEnd's result update.
+f_stFade(St st, bool hide) =>
+    int tr = hide ? 100 : 72
+    if not na(st.lb)
+        label.set_color(st.lb, color.new(cNeu, tr))
+        label.set_textcolor(st.lb, color.new(cNeu, tr))
+        if hide
+            label.set_text(st.lb, "")
+    if not na(st.bx)
+        box.set_bgcolor(st.bx, color.new(cNeu, hide ? 100 : 95))
+        box.set_border_color(st.bx, color.new(cNeu, tr))
+    for l in st.ln
+        if not na(l)
+            line.set_color(l, color.new(cNeu, tr))
+    for lab in st.tl
+        if not na(lab)
+            label.set_color(lab, color.new(cNeu, 100))
+            label.set_textcolor(lab, color.new(cNeu, tr))
+            if hide
+                label.set_text(lab, "")
+    for lab in st.tc
+        if not na(lab)
+            label.set_color(lab, color.new(cNeu, 100))
+            label.set_textcolor(lab, color.new(cNeu, tr))
+            if hide
+                label.set_text(lab, "")
+    true
+
 f_stDel(St st) =>
     st.lb.delete()
     st.bx.delete()
@@ -872,7 +926,7 @@ f_deliv(int d, float ext) =>
     string nm = ""
     for z in zs
         if z.dir == d and ext <= z.top + 0.25 * atr and ext >= z.bot - 0.25 * atr
-            int zr = z.tf == "5m" ? (z.sp ? 1 : 0) : z.tf == "15m" ? 2 : z.tf == "1H" ? 3 : 4
+            int zr = z.tf == "5m" ? (z.sp ? 1 : 0) : f_zRank(z.tf)
             if zr > 0
                 htf := true
                 if zr > rk
@@ -1099,7 +1153,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
     int htfRk = 0
     for z in zs
         if z.dir == d and z.tf != "5m" and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
-            int zr = z.tf == "15m" ? 2 : z.tf == "1H" ? 3 : 4
+            int zr = f_zRank(z.tf)
             htf := true
             if zr > htfRk
                 htfRk := zr
@@ -1309,6 +1363,9 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             tip := tipS
         color c = not okWin ? color.gray : isL ? iLong : iShort
         St st = St.new(ln = array.new<line>(), tl = array.new<label>(), tc = array.new<label>())
+        st.stopPx := sl
+        st.dir := d
+        st.madeB := bar_index
         st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, 85))
         // iFVG tag with hover info
         int gOff = math.min(bar_index - g.b, 989)
@@ -1472,6 +1529,15 @@ if barstate.isconfirmed and calc
         for i = trs.size() - 1 to 0
             if trs.get(i).done
                 trs.remove(i)
+    // Visual-only invalidation of an older confirmed setup. Never test its own trigger bar;
+    // stop-first ambiguity and any historical R result belong to the optional outcome tracker.
+    if iInvalidDraw != "Keep" and sts.size() > 0
+        for st in sts
+            if not st.invalid and st.madeB < bar_index and not na(st.stopPx)
+                bool touched = iInvalidTouch == "Wick" ? (st.dir == 1 ? low <= st.stopPx : high >= st.stopPx) : (st.dir == 1 ? close < st.stopPx : close > st.stopPx)
+                if touched
+                    st.invalid := true
+                    f_stFade(st, iInvalidDraw == "Hide")
     // ES gaps on the chart timeframe (FVG SMT)
     if esBu
         esBuB.push(bar_index)
@@ -1571,26 +1637,26 @@ if barstate.isconfirmed and calc
             f_addLv(hL, false, "1H L", f_exact(false, hL, hb, nb), ohL, false, false)
 
     // higher timeframe gaps
-    if iZ15 and k15 != k15[1]
+    if iZ15 and (iZMode != "Auto" or timeframe.in_seconds(zTF1) > cs) and k15 != k15[1]
         if u15
-            f_zAdd(1, ut15, ub15, "15m", k15)
+            f_zAdd(1, ut15, ub15, zNm1, k15)
         if e15
-            f_zAdd(-1, et15, eb15, "15m", k15)
-    if iZ60 and k60 != k60[1]
+            f_zAdd(-1, et15, eb15, zNm1, k15)
+    if iZ60 and (iZMode != "Auto" or timeframe.in_seconds(zTF2) > cs) and k60 != k60[1]
         if u60
-            f_zAdd(1, ut60, ub60, "1H", k60)
+            f_zAdd(1, ut60, ub60, zNm2, k60)
         if e60
-            f_zAdd(-1, et60, eb60, "1H", k60)
+            f_zAdd(-1, et60, eb60, zNm2, k60)
     if iZ5 and k5 != k5[1]
         if u5
             f_zAdd5(1, ut5, ub5, k5)
         if e5
             f_zAdd5(-1, et5, eb5, k5)
-    if iZ240 and k240 != k240[1]
+    if iZ240 and (iZMode != "Auto" or timeframe.in_seconds(zTF3) > cs) and k240 != k240[1]
         if u240
-            f_zAdd(1, ut240, ub240, "4H", k240)
+            f_zAdd(1, ut240, ub240, zNm3, k240)
         if e240
-            f_zAdd(-1, et240, eb240, "4H", k240)
+            f_zAdd(-1, et240, eb240, zNm3, k240)
     if zs.size() > 0
         for i = zs.size() - 1 to 0
             Zn z = zs.get(i)
