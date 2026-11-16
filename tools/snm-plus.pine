@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.51 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.52 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.51", shorttitle = "SNM+ 3.51", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.52", shorttitle = "SNM+ 3.52", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -31,6 +31,7 @@ const string G_C = "Confluence"
 const string G_R = "Sizing"
 const string G_D = "Display"
 const string G_A = "Alerts"
+const string G_DG = "Diagnostics (study only)"
 
 // ───────── inputs
 string iBias = input.string("Neutral", "Bias (your IF/THEN)", options = ["Bullish", "Bearish", "Neutral"], group = G_S, tooltip = "set it every morning. a setup against the bias is grade B")
@@ -40,6 +41,8 @@ bool iProx = input.bool(false, "Suppress near-duplicate confirmations", group = 
 float iProxAtr = input.float(0.75, "Dedup trigger distance (x ATR)", minval = 0.05, step = 0.05, group = G_S)
 int iProxBars = input.int(15, "Dedup lookback (bars)", minval = 1, maxval = 60, group = G_S)
 int iInvMax = input.int(15, "iFVG within (candles of the extreme)", minval = 2, maxval = 30, group = G_S, tooltip = "an inversion later than this is ignored")
+bool iDiag = input.bool(false, "Show iFVG near-miss reasons", group = G_DG, tooltip = "Study only, confirmed bars: small ? markers at inverted gap closes that do not qualify, and at rendered grade-B inversions. Hover for the specific failed gates. Never creates an entry, changes grading, or sends alerts. Off = 3.51 display.")
+int iDiagKeep = input.int(12, "Reason markers kept", minval = 1, maxval = 20, group = G_DG, tooltip = "Global cap across long and short. Very small chart-timeframe gaps are watched only when diagnostics are enabled; higher-timeframe small gaps and wick-only moves are not logged.")
 bool iRej = input.bool(true, "Mark rejected triggers", group = G_S, tooltip = "a candle that trades through the trigger of an ARMED setup but closes back: no confirmation. if its wick also took the liquidity on the target side, the setup is cancelled (rule 1.6: internal liquidity already swept)")
 bool iPrev = input.bool(true, "Show setups forming (before the close)", group = G_S, tooltip = "after a valid sweep, while a grade A+ (or your minimum) setup is building: ARMED = the trigger level to watch, FORMING = price is beyond it on the live candle. nothing is confirmed until the candle closes; displacement is checked at the close")
 bool iSc = input.bool(true, "Sweep + CISD setups (6.6)", inline = "sc", group = G_S, tooltip = "a CISD close after a key sweep, with no inverted gap needed: entry at the CISD close, stop at the sweep extreme. rulebook: NY AM only")
@@ -235,6 +238,13 @@ type Gp
     int b
     string tf = "1m"
     int rk = 1
+
+type DgGap
+    bool bull
+    float top
+    float bot
+    int bornB
+    float need
 
 type Sw
     bool on = false
@@ -559,6 +569,8 @@ var Ui ui = Ui.new()
 var array<Tr> trs = array.new<Tr>()
 var array<HcEvent> hcEvents = array.new<HcEvent>()
 var array<SigKey> sigKeys = array.new<SigKey>()
+var array<label> diagLabels = array.new<label>()
+var array<DgGap> diagSmall = array.new<DgGap>()
 var array<int> dedupBars = array.new_int()
 var array<Zn> zsE = array.new<Zn>()
 var array<int> esBuB = array.new<int>()
@@ -697,6 +709,16 @@ f_zAdd5(int dir, float top, float bot, int t0) =>
                     break
         if zs.size() > 80
             zs.shift()
+    true
+
+// Diagnostic objects are separate from setup state, alerts, and outcome tracking.
+// Only confirmed chart bars call this; no marker should be interpreted as an entry.
+f_dbgAdd(int d, float px, string why) =>
+    if iDiag and why != ""
+        label lab = label.new(bar_index, px, "?", style = d == 1 ? label.style_label_up : label.style_label_down, color = color.new(cWarn, 10), textcolor = f_on(cWarn), size = size.tiny, tooltip = "SNM+ iFVG near miss · " + (d == 1 ? "LONG" : "SHORT") + " · " + str.format_time(time, "HH:mm", NY) + " NY\n" + why + "\nStudy only · no entry or alert")
+        diagLabels.push(lab)
+        while diagLabels.size() > iDiagKeep
+            diagLabels.shift().delete()
     true
 
 // An existing sponsored 5m gap cannot inherit delivery from a higher-TF box
@@ -1337,6 +1359,37 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         if dedupBars.size() > 30
             dedupBars.shift()
     bool show = slOk and gN >= minG and (okWin or iOut == "Dim") and not duplicate
+    if iDiag and not cd and (not show or gN == 0)
+        string why = g.tf + " gap " + f_prc(g.bot) + "–" + f_prc(g.top) + " inverted on a confirmed close"
+        if not slOk
+            why += "\n✖ no valid stop/risk on the chosen stop rule"
+        if not (s.key or intSw)
+            why += "\n✖ internal sweep outside an active same-direction HTF FVG"
+        if not delOk
+            why += "\n✖ no active same-direction HTF delivery at sweep extreme"
+        if not disp
+            why += "\n✖ displacement: " + (dispB ? "close did not clear the gap edge by " + str.tostring(math.max(iClrAtr * atr, 2 * syminfo.mintick), "#.##") + " pts" : "body/shape below configured threshold")
+        if not dol
+            why += "\n✖ no permitted draw at " + str.tostring(iMinR) + "R"
+        if not vsh
+            why += "\n✖ inversion too late for V-shape (" + str.tostring(bar_index - s.extB) + " bars)"
+        if not bOk
+            why += "\n✖ against manual bias"
+        if hardB
+            why += "\n✖ reversal outside NY AM (rulebook block)"
+        if iTtF != "Off" and not ttOk
+            why += "\n✖ no " + ttNm + " C2/C3 closure (" + iTtF + " filter)"
+        if isR and iSmtR and smtOn and not smt
+            why += "\n✖ reversal lacks SMT"
+        if duplicate
+            why += "\n✖ suppressed as same-sweep duplicate"
+        if not okWin
+            why += "\n✖ outside trading windows or news blackout" + (iOut == "Dim" ? " (display dimmed)" : " (hidden)")
+        if gN < minG
+            why += "\n✖ grade " + f_gT(gN) + " below Show setups from grade = " + iMinG
+        if show and gN == 0
+            why += "\nB tag displayed, but not an A-or-better rulebook setup"
+        f_dbgAdd(d, triggerPx, why)
     if show
         sigKeys.push(SigKey.new(d, triggerPx, s.b0, bar_index, mdl))
         while sigKeys.size() > 30
@@ -1865,14 +1918,19 @@ if barstate.isconfirmed and calc
                         if okWin and iAlRejected and f_alertAllowed()
                             alert("SNM+ REJECTED " + (isL ? "LONG " : "SHORT ") + f_gT(pg) + " · " + syminfo.ticker + " · traded through " + f_prc(ptr) + " but closed back" + (liqTk ? " · target liquidity taken, setup cancelled" : ""), alert.freq_once_per_bar_close)
 
-    // inversions of the chart gaps
+    // Inversion diagnostics observe the very same gaps as the setup engine, before
+    // that engine removes each inverted gap. Small chart-TF gaps are a study-only watchlist.
     Gp bS = na
     Gp bL = na
+    string failS = ""
+    string failL = ""
     if gps.size() > 0
         for i = gps.size() - 1 to 0
             Gp g = gps.get(i)
             if g.b < bar_index
                 if g.bull and close < g.bot
+                    if iDiag and failS == ""
+                        failS := g.tf + " bullish gap " + f_prc(g.bot) + "–" + f_prc(g.top) + " inverted, but " + (not swS.on ? "no active high sweep was recognised" : bar_index - swS.extB > iInvMax ? "sweep is older than " + str.tostring(iInvMax) + " bars" : g.b < swS.extB - 30 ? "gap formed too far before the sweep" : g.rk <= swS.rk ? "a same/higher timeframe inversion already served this sweep" : "another eligible gap took priority")
                     if swS.on and bar_index - swS.extB <= iInvMax and g.b >= swS.extB - 30 and g.rk > swS.rk
                         if na(bS)
                             bS := g
@@ -1880,6 +1938,8 @@ if barstate.isconfirmed and calc
                             bS := g
                     gps.remove(i)
                 else if not g.bull and close > g.top
+                    if iDiag and failL == ""
+                        failL := g.tf + " bearish gap " + f_prc(g.bot) + "–" + f_prc(g.top) + " inverted, but " + (not swL.on ? "no active low sweep was recognised" : bar_index - swL.extB > iInvMax ? "sweep is older than " + str.tostring(iInvMax) + " bars" : g.b < swL.extB - 30 ? "gap formed too far before the sweep" : g.rk <= swL.rk ? "a same/higher timeframe inversion already served this sweep" : "another eligible gap took priority")
                     if swL.on and bar_index - swL.extB <= iInvMax and g.b >= swL.extB - 30 and g.rk > swL.rk
                         if na(bL)
                             bL := g
@@ -1888,6 +1948,26 @@ if barstate.isconfirmed and calc
                     gps.remove(i)
                 else if bar_index - g.b > 120
                     gps.remove(i)
+    if iDiag
+        string smallS = ""
+        string smallL = ""
+        if diagSmall.size() > 0
+            for i = diagSmall.size() - 1 to 0
+                DgGap g = diagSmall.get(i)
+                if g.bornB < bar_index and g.bull and close < g.bot
+                    if smallS == ""
+                        smallS := "raw bullish chart gap " + f_prc(g.bot) + "–" + f_prc(g.top) + " inverted but size " + str.tostring(g.top - g.bot, "#.##") + " < required " + str.tostring(g.need, "#.##") + " pts at formation (min ATR / 2 ticks)"
+                    diagSmall.remove(i)
+                else if g.bornB < bar_index and not g.bull and close > g.top
+                    if smallL == ""
+                        smallL := "raw bearish chart gap " + f_prc(g.bot) + "–" + f_prc(g.top) + " inverted but size " + str.tostring(g.top - g.bot, "#.##") + " < required " + str.tostring(g.need, "#.##") + " pts at formation (min ATR / 2 ticks)"
+                    diagSmall.remove(i)
+                else if bar_index - g.bornB > 120
+                    diagSmall.remove(i)
+        if na(bS)
+            f_dbgAdd(-1, close, failS != "" ? failS : smallS)
+        if na(bL)
+            f_dbgAdd(1, close, failL != "" ? failL : smallL)
     // a higher timeframe gap still open in the leg keeps the sweep alive for its own inversion
     if not na(bS)
         Gp pS = f_pend(true, bS, swS)
@@ -1918,6 +1998,13 @@ if barstate.isconfirmed and calc
 
     // new chart gaps
     float gMin = math.max(iGapMin * atr, 2 * syminfo.mintick)
+    if iDiag and not na(gMin)
+        if low > high[2] and low - high[2] < gMin
+            diagSmall.push(DgGap.new(true, low, high[2], bar_index, gMin))
+        if high < low[2] and low[2] - high < gMin
+            diagSmall.push(DgGap.new(false, low[2], high, bar_index, gMin))
+        while diagSmall.size() > 30
+            diagSmall.shift()
     if low > high[2] and low - high[2] >= gMin
         gps.push(Gp.new(true, low, high[2], time[2], bar_index, cTf, cm))
     if high < low[2] and low[2] - high >= gMin
