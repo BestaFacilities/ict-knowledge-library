@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.54 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.55 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.54", shorttitle = "SNM+ 3.54", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.55", shorttitle = "SNM+ 3.55", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -166,6 +166,8 @@ string iTrade = input.string("Last setup", "Entry / stop / target lines", option
 int iDays = input.int(5, "History to calculate (days)", minval = 1, maxval = 60, group = G_D, tooltip = "SNM+ only runs its engine on the last N days before the last candle (in replay: before the replay candle). 5 days loads fast and is enough for every level and gap a session needs. raise it only if you want older setups drawn")
 int iKeep = input.int(3, "Setups kept on the chart", minval = 1, maxval = 30, group = G_D)
 string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"], group = G_D, tooltip = "Simple: the panel shows D / T / E / confluence / today, and the tooltip shows the trade plan + only what is missing. Full: every check, as before")
+string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean"], group = G_D, tooltip = "Clean is display only: one nearest level and gap per side, one gap containing price, no timing ribbon, HTF candle display, HTF open, T-Spot boxes or NWOG drawing; the status line, D/T/E simple checklist, active preview, confirmed setups, diagnostics if enabled, calculations and alerts remain. Current keeps the 3.54 drawing density; the 3.55 text/count corrections apply in both views.")
+bool cleanView = iView == "Clean"
 bool iPanel = input.bool(true, "Checklist panel", inline = "pn", group = G_D)
 string iPos = input.string("Bottom Right", "", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D)
 string iSz = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G_D)
@@ -1486,9 +1488,11 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         if not na(blkPx)
             miss2 += "\n⚠ HRL in the way at " + f_prc(blkPx) + " (" + str.tostring(math.abs(blkPx - en) / risk, "#.#") + "R): BE / partial there"
         string tipS = (hardB ? "NOT ALLOWED · " : "") + (isL ? "LONG " : "SHORT ") + gT + " · " + mdl + (cd ? " · CISD" : " · iFVG " + g.tf) + (jud ? " · Judas" : "") + " · confluence " + str.tostring(conf) + "/4" + (okWin ? "" : inNews ? " · NEWS" : " · outside windows")
-        tipS += "\n\nentry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#.##") + " pts) · " + str.tostring(n) + " MNQ at $" + str.tostring(riskUsd)
+        tipS += "\n\nentry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#.##") + " pts) · size " + str.tostring(n) + " (" + syminfo.ticker + ") at $" + str.tostring(riskUsd) + " budget"
         tipS += dol ? "\nTP1 " + f_prc(tp) + " · " + tpN + " · " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "\nno TP1 draw"
         tipS += (na(beP) ? "" : "\nBE at " + f_prc(beP)) + (na(tp2) ? "" : "\nTP2 " + f_prc(tp2) + " (" + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R)")
+        if n == 0
+            miss2 += "\n✖ SIZE 0 · check risk budget and chart point value; not a tradable size"
         tipS += miss2 == "" ? "\n\n✔ every check passed" : "\n" + miss2
         if iHCOn
             tipS += "\nHTF CISD: " + (hcOk ? hcWhich : "none fresh") + " (info only)"
@@ -1571,7 +1575,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         if okWin
             if gN >= 2
                 ui.nAp += 1
-            else
+            else if gN == 1
                 ui.nA += 1
         sts.push(st)
         while sts.size() > iKeep
@@ -1635,13 +1639,13 @@ if barstate.isconfirmed and calc
         ui.nLoss := 0
     // T-Spot history: a new HTF candle opens → close the last one (wick dot), open a new box if there is a closure
     if iTsDraw and not na(htT0) and htT0 != htT0[1]
-        if tsCurDir != 0 and not na(tsWk)
+        if not cleanView and tsCurDir != 0 and not na(tsWk)
             bool hit = tsWk <= tsCurTop and tsWk >= tsCurBot
             color dc0 = tsCurDir == 1 ? iLong : iShort
             tsDot.push(label.new(tsWkT, tsWk, hit ? "●" : "○", xloc = xloc.bar_time, yloc = yloc.price, style = tsCurDir == 1 ? label.style_label_down : label.style_label_up, color = color.new(dc0, 100), textcolor = hit ? dc0 : cMu, size = size.small, tooltip = hit ? "the " + ttNm + " wick formed inside its T-Spot" : "the " + ttNm + " wick formed outside its T-Spot"))
         bool wasC2 = math.abs(clV) == 2
         // the candle that was meant to expand closed the other way: that sequence failed
-        if tsCurDir != 0 and tsDir == -tsCurDir and tsBx.size() > 0
+        if not cleanView and tsCurDir != 0 and tsDir == -tsCurDir and tsBx.size() > 0
             box fb = tsBx.last()
             fb.set_text(tsTxt + " · failed")
             fb.set_bgcolor(color.new(cNeu, 92))
@@ -1654,7 +1658,7 @@ if barstate.isconfirmed and calc
         tsCurBot := tsBot
         tsWk := na
         tsWkT := na
-        if tsDir != 0 and not na(tsTop)
+        if not cleanView and tsDir != 0 and not na(tsTop)
             color tsc0 = tsDir == 1 ? iLong : iShort
             tsTxt := (tsDir == 1 ? "▲ C" : "▼ C") + str.tostring(tsSeq) + " T-Spot"
             tsBx.push(box.new(htT0, tsTop, htT0 + ttSec * 1000, tsBot, xloc = xloc.bar_time, border_color = color.new(tsc0, 50), border_style = line.style_dashed, bgcolor = color.new(tsc0, 88), text = tsTxt, text_size = size.small, text_color = tsc0, text_halign = text.align_right, text_valign = tsDir == 1 ? text.align_top : text.align_bottom))
@@ -2000,7 +2004,7 @@ f_left(string sess) =>
     int(math.max(0, (endT - nowT) / 60000))
 int minLeft = inAs ? f_left(sAs) : inLo ? f_left(sLo) : inAm ? f_left(sAm) : na
 color ribC = inNews ? color.new(cBad, 10) : inJudas ? color.new(#9C27B0, 35) : inMacro ? color.new(cWarn, 35) : inWin ? color.new(cOk, 75) : na
-plotshape(iRib and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
+plotshape(iRib and not cleanView and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
 var table mt = table.new(position.top_center, 2, 1, border_width = 2)
 var table diagTb = iDiag ? table.new(position.bottom_left, 1, 1) : na
 var array<line> pLn = array.new<line>()
@@ -2095,7 +2099,7 @@ if barstate.islast
         for side = 0 to 1
             int drawn = 0
             int tries = 0
-            while drawn < iLvN and tries < 20
+            while drawn < (cleanView ? 1 : iLvN) and tries < 20
                 tries += 1
                 int best = -1
                 float bd = na
@@ -2126,12 +2130,12 @@ if barstate.islast
                     dLb.push(label.new(bar_index + 10, v.px, tx, style = label.style_label_left, color = color.new(lc, 100), textcolor = color.new(lc, 20), size = size.tiny, text_font_family = font.family_monospace))
                     dPx.push(v.px)
                     drawn += 1
-    if iTtLines and not na(htO)
+    if iTtLines and not cleanView and not na(htO)
         string tsz = iTtSz == "Tiny" ? size.tiny : iTtSz == "Normal" ? size.normal : size.small
         dLn.push(line.new(bar_index - 15, htO, bar_index + 10, htO, color = color.new(lc, 10)))
         dLb.push(label.new(bar_index + 10, htO, ttNm + " OPEN", style = label.style_label_left, color = color.new(lc, 100), textcolor = lc, size = tsz, text_font_family = font.family_monospace))
     // HTF candles on the right (TTrades view): 3 closed + the one forming, at real prices, tagged C2 → C3 → C4
-    if iTtView and not na(c2o) and not na(htT0)
+    if iTtView and not cleanView and not na(c2o) and not na(htT0)
         float fh = high
         float fl = low
         int kk = 0
@@ -2218,7 +2222,7 @@ if barstate.islast
             dLn.push(line.new(xe, eqv, xe + step + w - 1, eqv, color = cTx, style = line.style_dashed, width = 1))
             dLb.push(label.new(xe + step + w, eqv, "EQ", style = label.style_label_left, color = color.new(cTx, 100), textcolor = cTx, size = tSz, text_font_family = font.family_monospace))
         dLb.push(label.new(x0 + step, top + pad, ttNm + " candles", style = label.style_label_down, color = color.new(cTx, 100), textcolor = cTx, size = tSz, text_font_family = font.family_monospace))
-    if iNwog and not na(nwT) and not na(nwT0) and iNwSt != "Hidden"
+    if iNwog and not cleanView and not na(nwT) and not na(nwT0) and iNwSt != "Hidden"
         float nwC = (nwT + nwB) / 2
         if iNwSt == "Full box"
             int xE = time + 15 * cs * 1000
@@ -2240,12 +2244,12 @@ if barstate.islast
             for pass = 0 to 1
                 for i = 0 to zs.size() - 1
                     Zn z = zs.get(i)
-                    if nIn < 2 and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
+                    if nIn < (cleanView ? 1 : 2) and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
                         zUsed.push(i)
                         nIn += 1
         // then the nearest ones above and below
         for side = 0 to 1
-            for pass = 1 to iZN
+            for pass = 1 to (cleanView ? 1 : iZN)
                 int best = -1
                 float bd = na
                 for i = 0 to zs.size() - 1
@@ -2367,7 +2371,7 @@ if barstate.islast and iMap
         sTx := "NEWS · " + newsWhy + " · no trade until the blackout ends"
         sBg := cWarn
     else if iTrack and (ui.nTk >= 2 or ui.nLoss >= 2)
-        sTx := "DAY DONE · " + str.tostring(ui.nTk) + " trades / " + str.tostring(ui.nLoss) + " losses · platform closed"
+        sTx := "TRACKER LIMIT · " + str.tostring(ui.nTk) + " trades / " + str.tostring(ui.nLoss) + " losses · indicator still prints/alerts"
         sBg := cNeu
     else if dirn == "No trade"
         sTx := mTxt
@@ -2385,7 +2389,7 @@ if barstate.islast and iMap
         sTx := ui.lastG + (dL ? " LONG" : " SHORT") + " CONFIRMED · run your checklist · max 2 trades today"
         sBg := dc
     else if ag >= math.max(minG, 1)
-        sTx := "ARMED " + (dL ? "LONG " : "SHORT ") + f_gT(ag) + " · close " + (dL ? "> " : "< ") + f_prc(atr0) + " · stop " + f_prc(asl) + " (" + str.tostring(ark, "#") + " pts) · " + str.tostring(an) + " MNQ"
+        sTx := "ARMED " + (dL ? "LONG " : "SHORT ") + f_gT(ag) + " · close " + (dL ? "> " : "< ") + f_prc(atr0) + " · stop " + f_prc(asl) + " (" + str.tostring(ark, "#") + " pts) · " + (an == 0 ? "SIZE 0 · check budget / point value" : "size " + str.tostring(an) + " (" + syminfo.ticker + ")")
         sBg := dc
     else if inZ
         sTx := (dL ? "LONGS ONLY" : "SHORTS ONLY") + " · at the " + dz.tf + (dL ? " FVG+ " : " FVG- ") + f_prc(dz.bot) + " – " + f_prc(dz.top) + " · wait for a sweep" + (na(swP) ? "" : " of " + swN + " " + f_prc(swP))
@@ -2407,7 +2411,7 @@ if barstate.islast and iDiag
 
 // ───────── checklist panel (ManipulationX style)
 var table tb = table.new(position.bottom_right, 2, 19, border_width = 0)
-if barstate.islast and iPanel and iDet == "Simple"
+if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     tb.clear(0, 0, 1, 18)
     tb.set_position(iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right)
     tb.set_bgcolor(cPan)
@@ -2425,7 +2429,7 @@ if barstate.islast and iPanel and iDet == "Simple"
         tb.cell(1, r + 1, rv.get(r) + (v == 1 ? "  ✔" : v == 0 ? "  ✖" : ""), text_color = v == 1 ? cOk : v == 0 ? cBad : cMu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     tb.cell(0, 4, "Today", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 4, "A+ " + str.tostring(ui.nAp) + " · A " + str.tostring(ui.nA) + " · max 2 trades", text_color = ui.nAp + ui.nA > 2 ? cWarn : cTx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-if barstate.islast and iPanel and iDet == "Full"
+if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.set_position(iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right)
     color tx = cTx
     color mu = cMu
