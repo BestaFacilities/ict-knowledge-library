@@ -11,6 +11,7 @@ The **working script is `tools/snm-plus.pine` (3.55)**; the exact uploaded 3.47 
 | `snm-plus.pine` | Active 3.55 indicator: 3.47 baseline plus default-preserving SMT symbol override, alert controls, same-sweep dedup, optional Auto gap ladder, stop-based Dim/Hide drawings, default-off confirmed HTF CISD context, hybrid HTF gap invalidation with breached-state drawings, and optional, lean iFVG near-miss codes + latest-reason row (no small-gap watchlist). The new Clean view is opt-in and changes drawings only, not inputs used for setup grading/alerts. |
 | `snm-plus-guide.md`, `snm-settings-by-pair.md` | Current usage and maintained pair/timeframe settings; update with input changes. |
 | `snm-integration-plan.md` | Feature-by-feature CISD Model+ comparison, shipped first pass and deferred experimental candidates. |
+| `snm-355-verification.md` | Local 3.55 check results, explicit unverified TradingView status, and same-feed Current/Clean replay and alert checklist. |
 | `archive/legacy-indicators/` | Earlier CISD/CRT and ManipulationX scripts, studies, guides, settings matrix, and scale-table helper, moved here unchanged for retrieval. See its README. |
 | `archive/` | Earlier archived indicator revisions, also retained unchanged. |
 | `pine-lint.sh`, `pine-validate.py`, `pine-gate-run.py`, `tests/` | Pine compiler/validator/runtime smoke tests. These remain accessible at their original paths. Gate harness keys legacy exercises by filename, so pass the archived file path explicitly. |
