@@ -1,14 +1,14 @@
-// NOT PINE CODE — workspace map for tools/snm-plus.pine (SNM+ 3.53, based on André Wonou's uploaded 3.47).
+// NOT PINE CODE — workspace map for tools/snm-plus.pine (SNM+ 3.54, based on André Wonou's uploaded 3.47).
 
 # Indicator workspace — SNM+ is the current project
 
-The **working script is `tools/snm-plus.pine` (3.53)**; the exact uploaded 3.47 source is `tools/archive/snm-plus-3.47.pristine.txt` (SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`). Before the first integration pass, only `//@version=6` was moved to literal line 1; 3.48 added the first opt-in controls; 3.49 added the optional Auto gap ladder and stop-based drawing controls; 3.50 added default-off confirmed HTF CISD context; 3.51 added a conservative default-on hybrid HTF gap lifecycle and gaps containing price; 3.52 added default-off near-miss diagnostics for iFVG inversions; 3.53 trims the diagnostic to address TradingView CE10117 and separates the CISD minutes input to address CW10026. Do not mistake an archived predecessor for the active indicator.
+The **working script is `tools/snm-plus.pine` (3.54)**; the exact uploaded 3.47 source is `tools/archive/snm-plus-3.47.pristine.txt` (SHA-256 `abbc9ffda5c39c2176b4695d4abc0096aa996d04a5d0e6787d94971815ea0b96`). Before the first integration pass, only `//@version=6` was moved to literal line 1; 3.48 added the first opt-in controls; 3.49 added the optional Auto gap ladder and stop-based drawing controls; 3.50 added default-off confirmed HTF CISD context; 3.51 added a conservative default-on hybrid HTF gap lifecycle and gaps containing price; 3.52 added default-off near-miss diagnostics for iFVG inversions; 3.53 trimmed the diagnostic to address TradingView CE10117 and separated the CISD minutes input to address CW10026; 3.54 adds visible codes and a latest-reason row so hover is unnecessary. Neither build has yet been confirmed against TradingView’s compiled-token limit. Do not mistake an archived predecessor for the active indicator.
 
 ## Here now
 
 | Path | Purpose |
 |---|---|
-| `snm-plus.pine` | Active 3.53 indicator: 3.47 baseline plus default-preserving SMT symbol override, alert controls, same-sweep dedup, optional Auto gap ladder, stop-based Dim/Hide drawings, default-off confirmed HTF CISD context, hybrid HTF gap invalidation with breached-state drawings, and optional, lean iFVG near-miss `?` explanations (no small-gap watchlist). |
+| `snm-plus.pine` | Active 3.54 indicator: 3.47 baseline plus default-preserving SMT symbol override, alert controls, same-sweep dedup, optional Auto gap ladder, stop-based Dim/Hide drawings, default-off confirmed HTF CISD context, hybrid HTF gap invalidation with breached-state drawings, and optional, lean iFVG near-miss codes + latest-reason row (no small-gap watchlist). |
 | `snm-plus-guide.md`, `snm-settings-by-pair.md` | Current usage and maintained pair/timeframe settings; update with input changes. |
 | `snm-integration-plan.md` | Feature-by-feature CISD Model+ comparison, shipped first pass and deferred experimental candidates. |
 | `archive/legacy-indicators/` | Earlier CISD/CRT and ManipulationX scripts, studies, guides, settings matrix, and scale-table helper, moved here unchanged for retrieval. See its README. |

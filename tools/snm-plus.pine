@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.53 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.54 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.53", shorttitle = "SNM+ 3.53", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.54", shorttitle = "SNM+ 3.54", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -41,7 +41,7 @@ bool iProx = input.bool(false, "Suppress near-duplicate confirmations", group = 
 float iProxAtr = input.float(0.75, "Dedup trigger distance (x ATR)", minval = 0.05, step = 0.05, group = G_S)
 int iProxBars = input.int(15, "Dedup lookback (bars)", minval = 1, maxval = 60, group = G_S)
 int iInvMax = input.int(15, "iFVG within (candles of the extreme)", minval = 2, maxval = 30, group = G_S, tooltip = "an inversion later than this is ignored")
-bool iDiag = input.bool(false, "Show iFVG near-miss reasons", group = G_DG, tooltip = "Study only: on confirmed gap inversions, mark failed sweep or setup gates with a small ?. Hover for reasons. Does not create an entry, alter grades or send alerts. Off preserves 3.51 behavior.")
+bool iDiag = input.bool(false, "Show iFVG near-miss reasons", group = G_DG, tooltip = "Study only: confirmed iFVG close-throughs print short reason codes on the chart and show the latest reason in a small bottom-left panel. No hover required; no entry, grade, or alert changes. Off preserves 3.51 behavior.")
 int iDiagKeep = input.int(12, "Reason markers kept", minval = 1, maxval = 20, group = G_DG, tooltip = "Global cap across both directions. Markers require a confirmed inversion of a gap that passed the minimum size filter; wick-only and sub-minimum gaps are not logged.")
 bool iRej = input.bool(true, "Mark rejected triggers", group = G_S, tooltip = "a candle that trades through the trigger of an ARMED setup but closes back: no confirmation. if its wick also took the liquidity on the target side, the setup is cancelled (rule 1.6: internal liquidity already swept)")
 bool iPrev = input.bool(true, "Show setups forming (before the close)", group = G_S, tooltip = "after a valid sweep, while a grade A+ (or your minimum) setup is building: ARMED = the trigger level to watch, FORMING = price is beyond it on the live candle. nothing is confirmed until the candle closes; displacement is checked at the close")
@@ -563,6 +563,7 @@ var array<Tr> trs = array.new<Tr>()
 var array<HcEvent> hcEvents = array.new<HcEvent>()
 var array<SigKey> sigKeys = array.new<SigKey>()
 var array<label> diagLabels = array.new<label>()
+var array<string> diagLast = array.new_string(1, "")
 var array<int> dedupBars = array.new_int()
 var array<Zn> zsE = array.new<Zn>()
 var array<int> esBuB = array.new<int>()
@@ -707,7 +708,9 @@ f_zAdd5(int dir, float top, float bot, int t0) =>
 // Only confirmed chart bars call this; no marker should be interpreted as an entry.
 f_dbgAdd(int d, float px, string why) =>
     if iDiag and why != ""
-        label lab = label.new(bar_index, px, "?", style = d == 1 ? label.style_label_up : label.style_label_down, color = color.new(cWarn, 10), textcolor = f_on(cWarn), size = size.tiny, tooltip = (d == 1 ? "LONG" : "SHORT") + " iFVG near miss\n" + why)
+        string side = d == 1 ? "L " : "S "
+        label lab = label.new(bar_index, px, side + str.substring(why, 0, math.min(18, str.length(why))), style = d == 1 ? label.style_label_up : label.style_label_down, color = color.new(cWarn, 10), textcolor = f_on(cWarn), size = size.tiny, tooltip = "iFVG near miss: " + side + why)
+        diagLast.set(0, str.format_time(time, "dd MMM HH:mm", NY) + " " + side + why)
         diagLabels.push(lab)
         while diagLabels.size() > iDiagKeep
             diagLabels.shift().delete()
@@ -715,16 +718,7 @@ f_dbgAdd(int d, float px, string why) =>
 
 // Reason for a registered gap inversion before setup grading. No new entry path.
 f_dbgGate(Sw s, Gp g) =>
-    string why = g.tf + " gap " + f_prc(g.bot) + "–" + f_prc(g.top) + ": "
-    if not s.on
-        why += "no recognised sweep"
-    else if bar_index - s.extB > iInvMax
-        why += "sweep older than " + str.tostring(iInvMax) + " bars"
-    else if g.b < s.extB - 30
-        why += "gap predates sweep too far"
-    else
-        why += "same/higher TF already inverted on this sweep"
-    why
+    g.tf + " " + (not s.on ? "NO SWEEP" : bar_index - s.extB > iInvMax ? "SWEEP LATE" : g.b < s.extB - 30 ? "GAP TOO OLD" : "TF RANK USED")
 
 // An existing sponsored 5m gap cannot inherit delivery from a higher-TF box
 // that is merely visible while breached. Chart-close mode retains 3.50 semantics.
@@ -1365,35 +1359,21 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             dedupBars.shift()
     bool show = slOk and gN >= minG and (okWin or iOut == "Dim") and not duplicate
     if iDiag and not cd and (not show or gN == 0)
-        string why = g.tf + " gap " + f_prc(g.bot) + "–" + f_prc(g.top) + " inverted on a confirmed close"
-        if not slOk
-            why += "\n✖ no valid stop/risk on the chosen stop rule"
-        if not (s.key or intSw)
-            why += "\n✖ internal sweep outside an active same-direction HTF FVG"
-        if not delOk
-            why += "\n✖ no active same-direction HTF delivery at sweep extreme"
-        if not disp
-            why += dispB ? "\n✖ close too near the trigger" : "\n✖ weak displacement body"
-        if not dol
-            why += "\n✖ no permitted draw at " + str.tostring(iMinR) + "R"
-        if not vsh
-            why += "\n✖ inversion too late for V-shape (" + str.tostring(bar_index - s.extB) + " bars)"
-        if not bOk
-            why += "\n✖ against manual bias"
-        if hardB
-            why += "\n✖ reversal outside NY AM (rulebook block)"
-        if iTtF != "Off" and not ttOk
-            why += "\n✖ no " + ttNm + " C2/C3 closure (" + iTtF + " filter)"
-        if isR and iSmtR and smtOn and not smt
-            why += "\n✖ reversal lacks SMT"
-        if duplicate
-            why += "\n✖ suppressed as same-sweep duplicate"
-        if not okWin
-            why += "\n✖ outside trading windows or news blackout" + (iOut == "Dim" ? " (display dimmed)" : " (hidden)")
-        if gN < minG
-            why += "\n✖ grade " + f_gT(gN) + " below Show setups from grade = " + iMinG
-        if show and gN == 0
-            why += "\nB tag displayed, but not an A-or-better rulebook setup"
+        string why = g.tf + " " + f_gT(gN)
+        why += not slOk ? " STOP" : ""
+        why += not (s.key or intSw) ? " SWEEP" : ""
+        why += not delOk ? " NO-HTF" : ""
+        why += not disp ? " DISP" : ""
+        why += not dol ? " NO-TP" : ""
+        why += not vsh ? " V-SHAPE" : ""
+        why += not bOk ? " BIAS" : ""
+        why += hardB ? " NY-BLOCK" : ""
+        why += iTtF != "Off" and not ttOk ? " TTFM" : ""
+        why += isR and iSmtR and smtOn and not smt ? " SMT" : ""
+        why += duplicate ? " DUP" : ""
+        why += not okWin ? " WINDOW" : ""
+        why += gN < minG ? " BELOW-" + iMinG : ""
+        why += show and gN == 0 ? " B-ONLY" : ""
         f_dbgAdd(d, triggerPx, why)
     if show
         sigKeys.push(SigKey.new(d, triggerPx, s.b0, bar_index, mdl))
@@ -2022,6 +2002,7 @@ int minLeft = inAs ? f_left(sAs) : inLo ? f_left(sLo) : inAm ? f_left(sAm) : na
 color ribC = inNews ? color.new(cBad, 10) : inJudas ? color.new(#9C27B0, 35) : inMacro ? color.new(cWarn, 35) : inWin ? color.new(cOk, 75) : na
 plotshape(iRib and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
 var table mt = table.new(position.top_center, 2, 1, border_width = 2)
+var table diagTb = iDiag ? table.new(position.bottom_left, 1, 1) : na
 var array<line> pLn = array.new<line>()
 var array<label> pLb = array.new<label>()
 var int armS = -1
@@ -2419,6 +2400,10 @@ if barstate.islast and iMap
     // the clock SNM+ really uses (New York), so a chart set to another time zone is obvious at a glance
     int nyNow = barstate.isrealtime ? timenow : time
     mt.cell(1, 0, "NY " + str.format_time(nyNow, "HH:mm", NY), text_color = cTx, bgcolor = color.new(cPan, 0), text_size = pSz, text_font_family = font.family_monospace)
+
+// The most recent confirmed inversion reason remains readable without hover.
+if barstate.islast and iDiag
+    diagTb.cell(0, 0, "iFVG why-not: " + (diagLast.get(0) == "" ? "waiting for registered gap inversion" : diagLast.get(0)), text_color = cTx, bgcolor = color.new(cPan, 8), text_size = size.small, text_halign = text.align_left)
 
 // ───────── checklist panel (ManipulationX style)
 var table tb = table.new(position.bottom_right, 2, 19, border_width = 0)
