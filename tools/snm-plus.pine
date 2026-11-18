@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.55 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.56 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.55", shorttitle = "SNM+ 3.55", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.56", shorttitle = "SNM+ 3.56", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -153,6 +153,7 @@ bool iAlOn = input.bool(true, "Enable alerts", group = G_A)
 bool iAlConfirmed = input.bool(true, "Confirmed", inline = "al", group = G_A)
 bool iAlPreview = input.bool(true, "Armed / forming", inline = "al", group = G_A)
 bool iAlRejected = input.bool(true, "Rejected", inline = "al", group = G_A)
+bool iAlBlockedB = input.bool(false, "Alert rulebook-blocked B (study)", group = G_A, tooltip = "Off: keep rulebook-blocked B tags but suppress their confirmed alerts. On: send marked STUDY BLOCKED alerts. Grade, entry, news and alert windows stay unchanged.")
 bool iAlWindow = input.bool(false, "Use separate alert windows (NY)", group = G_A, tooltip = "Off: preserve SNM+ 3.47's trading-window alerts. On: alerts must be inside the trading windows AND one of these alert windows. News blackout still suppresses alerts.")
 string iAlS1 = input.session("0930-1100", "Alert window 1 (NY)", group = G_A)
 bool iAlS2On = input.bool(false, "Alert window 2", inline = "al2", group = G_A)
@@ -1609,8 +1610,10 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         ui.intL := intTk ? 0 : 1
         ui.lrl := dol ? str.tostring(lrN) + " / " + str.tostring(lrNeed) : "-"
         ui.lrOk := dol ? (lrOk ? 1 : 0) : 2
-        if okWin
-            ui.alMsg := "SNM+ " + (isL ? "LONG " : "SHORT ") + gT + " " + str.tostring(conf) + "/4 " + (mdl == "C" ? "CONTINUATION" : mdl == "RB" ? "REBALANCE" : mdl == "RV" ? "REVERSAL" : "") + (cd ? " SWEEP+CISD" : "") + (rBad ? " (outside NY AM)" : "") + (jud ? " JUDAS" : "") + " · " + syminfo.ticker + " · swept " + s.nm + " · entry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#") + " pts) · " + (dol ? "TP " + f_prc(tp) + " " + tpN : "no draw") + " · " + str.tostring(n) + " contracts"
+        // A displayed rulebook-blocked B is informational by default; the explicit
+        // study override keeps the original alert windows and marks the payload.
+        if okWin and (not hardB or iAlBlockedB)
+            ui.alMsg := "SNM+ " + (hardB ? "STUDY BLOCKED · " : "") + (isL ? "LONG " : "SHORT ") + gT + " " + str.tostring(conf) + "/4 " + (mdl == "C" ? "CONTINUATION" : mdl == "RB" ? "REBALANCE" : mdl == "RV" ? "REVERSAL" : "") + (cd ? " SWEEP+CISD" : "") + (rBad ? " (outside NY AM)" : "") + (jud ? " JUDAS" : "") + " · " + syminfo.ticker + " · swept " + s.nm + " · entry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#") + " pts) · " + (dol ? "TP " + f_prc(tp) + " " + tpN : "no draw") + " · " + str.tostring(n) + " contracts"
     true
 
 // ───────── engine, closed bars only
