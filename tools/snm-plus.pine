@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.58 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.59 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.58", shorttitle = "SNM+ 3.58", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.59", shorttitle = "SNM+ 3.59", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -167,11 +167,11 @@ bool iEsChk = input.bool(true, "ES checks (delivery + FVG SMT)", group = G_C, to
 string iTrade = input.string("Last setup", "Entry / stop / target lines", options = ["Last setup", "All setups", "Off"], group = G_D, tooltip = "Last setup = older setups keep their label and iFVG box only")
 int iDays = input.int(5, "History to calculate (days)", minval = 1, maxval = 60, group = G_D, tooltip = "SNM+ only runs its engine on the last N days before the last candle (in replay: before the replay candle). 5 days loads fast and is enough for every level and gap a session needs. raise it only if you want older setups drawn")
 int iKeep = input.int(3, "Setups kept on the chart", minval = 1, maxval = 30, group = G_D)
-string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"], group = G_D, tooltip = "Simple: the panel shows D / T / E / confluence / today, and the tooltip shows the trade plan + only what is missing. Full: every check, as before")
+string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"], group = G_D, tooltip = "Simple: D/T/E panel and plan + missing checks. Full: expanded panel and compact per-check/management tooltip. The verbose Full prose was condensed in 3.59 for TradingView's compiled-token limit; calculations, grades and alerts are unchanged.")
 string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean"], group = G_D, tooltip = "Clean is display only: one nearest level and gap per side, one gap containing price, no timing ribbon, HTF candle display, HTF open, T-Spot boxes or NWOG drawing; the status line, D/T/E simple checklist, active preview, confirmed setups, diagnostics if enabled, calculations and alerts remain. Current keeps the 3.54 drawing density; the 3.55 text/count corrections apply in both views.")
 bool cleanView = iView == "Clean"
 bool iPanel = input.bool(true, "Checklist panel", inline = "pn", group = G_D)
-bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only: shows the latest evaluated iFVG or Sweep + CISD trigger on this bar, otherwise the active sweep / provisional preview / wait state. A reason is only a known first blocker from the existing checks; no raw-gap or wick-only detector is added. ELIGIBLE means the indicator's alert gates pass, not that a TradingView alert was delivered. Off draws no new row.")
+bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only: shows the latest evaluated iFVG or Sweep + CISD trigger on this bar, otherwise the active sweep / existing ARMED/FORMING preview (if enabled) / wait state. A reason is only a known first blocker from existing checks; no raw-gap or wick-only detector is added. ELIGIBLE means the indicator's alert gates pass, not that a TradingView alert was delivered. Off draws no new row.")
 string iPos = input.string("Auto", "", options = ["Auto", "Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D, tooltip = "Auto puts the checklist at middle right on 1m–5m charts so it is nearer the live price row, and bottom right on slower charts. Choose a fixed position to restore the 3.56 bottom-right placement or avoid overlap with other indicators. Tables follow chart corners, not price bars.")
 string iSz = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G_D)
 string iTheme = input.string("Auto", "Theme", options = ["Auto", "Dark", "Light"], group = G_D, tooltip = "Auto reads your chart background")
@@ -1326,7 +1326,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
     bool rBad = isR and not inAm
     int lrNeed = isR ? 3 : 2
     bool delOk = isR ? htfRk >= (iRvDel == "15m allowed (more setups)" ? 2 : 3) : htf
-    bool edOk = not na(edP)
     bool lrOk = lrN >= lrNeed
     bool bOk = iBias == "Neutral" or (iBias == "Bullish") == isL
     bool scBad = cd and not inAm
@@ -1397,72 +1396,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         int n = syminfo.pointvalue > 0 ? int(math.floor(riskUsd / (risk * syminfo.pointvalue))) : 0
         bool wide = maxStop > 0 and risk > maxStop
         string gT = f_gT(gN)
-        string tip = (hardB ? "NOT ALLOWED (rulebook) · " : "") + (isL ? "LONG " : "SHORT ") + gT + " · confluence " + str.tostring(conf) + "/4" + (okWin ? "" : inNews ? " · NEWS BLACKOUT (" + newsWhy + ")" : " · OUTSIDE YOUR WINDOWS")
-        tip += "\n\nswept: " + s.dt
-        tip += "\n" + f_ck(s.key or intSw) + (s.key ? "key level swept" : intSw ? (mdl == "C" ? "internal sweep inside the HTF FVG (continuation stop-hunt)" : "internal sweep into the HTF FVG (HTF PD array)") : "internal sweep outside any HTF FVG → B")
-        if cd
-            tip += "\n✔ CISD · close beyond " + f_prc(isL ? g.top : g.bot) + " (open of the run) · entry at the CISD close"
-            tip += "\n– iFVG not required (Sweep + CISD, rulebook 6.6)"
-        else
-            tip += "\n" + f_ck(true) + "iFVG " + g.tf + " · " + f_prc(g.bot) + " - " + f_prc(g.top)
-        tip += cd ? "" : jud ? "\n– highest TF iFVG not required (Judas)" : "\n" + f_ck(hiOk) + "highest TF iFVG in the leg" + pdTxt
-        tip += "\n" + f_ck(vsh) + "V-shape (" + str.tostring(bar_index - s.extB) + " candles from the extreme)"
-        tip += "\n" + f_ck(not ttLate) + "timing · " + str.tostring(ttEl, "#") + " / " + str.tostring(ttLen, "#") + " min into the " + ttNm + " candle · " + str.tostring(math.abs(en - htO), "#.##") + " pts from its open " + f_prc(htO) + (ttLate ? " · late: TTFM waits for the next " + ttNm + " candle" : "")
-        tip += "\n" + f_ck(disp) + "displacement · body " + str.tostring(body, "#.##") + " pts" + (dispB ? "" : " (weak body)") + " · close " + str.tostring(clr, "#.##") + " pts beyond " + f_prc(trgL) + (clrOk ? "" : " (needs " + str.tostring(math.max(iClrAtr * atr, 2 * syminfo.mintick), "#.##") + ")")
-        if smtOn and iEsChk
-            [esOk, esN] = f_esDel(d, s.pairX)
-            int fs = cd ? 2 : f_fsmt(g.bull, g.b, g.tf)
-            tip += "\n" + f_ck(esOk) + pairRoot + (esOk ? " delivering from " + esN : " not in an HTF FVG at its extreme")
-            if fs != 2
-                tip += "\n" + (fs == 1 ? "✔ " + pairRoot + " printed the same gap" : "✖ FVG SMT: " + pairRoot + " has no matching gap → low probability (rulebook: skip)")
-        tip += "\n" + f_ck(delOk) + "HTF delivery" + (htf ? " · " + htfN : "") + (isR and htf and not delOk ? " · a reversal needs " + (iRvDel == "15m allowed (more setups)" ? "15m+" : "1H+") : "")
-        tip += "\n" + f_ck(dol) + "draw on liquidity" + (dol ? " · " + tpN + " " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "")
-        if tpH
-            tip += "\n   ✖ the draw is HRL (protected): rulebook says never target it"
-        if not na(blkPx)
-            tip += "\n   ⚠ HRL in the way: " + blkN + " " + f_prc(blkPx) + " (" + str.tostring(math.abs(blkPx - en) / risk, "#.#") + "R) · partial / BE there"
-        if mb == "C"
-            tip += "\n" + f_ck(edOk) + (edOk ? "edging " + edN + " " + f_prc(edP) + " (" + str.tostring(math.abs(edP - edRef), "#.##") + " pts from the recent " + (isL ? "high)" : "low)") : "no untaken key level edged within " + str.tostring(edgeDist) + " pts")
-        if dol
-            tip += "\n" + f_ck(lrOk) + "LRL " + str.tostring(lrN) + " untaken failure swing" + (lrN == 1 ? "" : "s") + " to TP1 (need " + str.tostring(lrNeed) + (isR ? ", reversal)" : ", continuation)")
-        tip += "\n" + f_ck(not intTk) + (intTk ? "internal liquidity already swept before entry · rulebook: don't enter" : "internal liquidity untouched")
-        tip += "\n\nconfluence"
-        tip += "\n" + f_ck(ttOk) + ttTx
-        tip += "\n" + f_ck(tsOk) + (tsOk ? "wick formed in the " + ttNm + " T-Spot " + f_prc(tsBot) + " – " + f_prc(tsTop) : tsDir == d ? "wick outside the " + ttNm + " T-Spot " + f_prc(tsBot) + " – " + f_prc(tsTop) : "no " + ttNm + " T-Spot in this direction")
-        tip += "\n" + f_ck(cisd) + "CISD" + (na(cLvl) ? "" : " · " + f_prc(cLvl))
-        tip += "\n" + f_ck(div) + "volume divergence"
-        if iHCOn
-            tip += "\n" + (hcOk ? "✔ " + hcWhich : "– no fresh confirmed HTF CISD") + " (context only; not part of grade)"
-        tip += "\n" + f_ck(smtP) + "SMT / PSP" + (smtOn ? " with " + pairRoot + (smt ? " · SMT" : "") + (psp ? " · PSP (the " + ttNm + " C2 closed " + (c2c > c2o ? "bullish" : "bearish") + ", " + pairRoot + " " + (pc2c > pc2o ? "bullish" : "bearish") + ")" : "") : " (off)")
-        tip += "\n\n" + (mdl == "C" ? "C · continuation (with the " + iMsTf + " structure)" : mdl == "RB" ? "RB · rebalance to the 5m / 15m FVG left on the move (against the " + iMsTf + " structure) · runner = TP2" : mdl == "RV" ? "RV · reversal to the HTF draw (against the " + iMsTf + " structure)" + (inMacro ? " · in the macro" : " · usually inside the 10am macro") : "? · structure not set yet")
-        if rBad
-            tip += "\n✖ REVERSAL OUTSIDE NY AM · rulebook: Asia / London = continuation only"
-        if scBad
-            tip += "\n✖ SWEEP + CISD OUTSIDE NY AM · rulebook 6.6: NY AM only"
-        if isR and smtOn and not smt
-            tip += "\n✖ no SMT with " + pairRoot + " · rulebook: a reversal needs SMT"
-        tip += "\n" + (bOk ? "with the bias" : "AGAINST the bias") + (pre ? " · premarket swept" : "") + (inMacro ? " · macro" : "")
-        if jWin
-            tip += "\n" + f_ck(jud) + "Judas · trigger " + str.tostring(trig, "#.##") + " pts (min " + str.tostring(judasPts) + ")"
-        tip += "\nentry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#.##") + " pts, " + slWhy + ")"
-        string alt = ""
-        if slWhy != "sweep extreme"
-            alt += " · sweep extreme " + f_prc(slX) + " (" + str.tostring(math.abs(en - slX), "#.##") + ")"
-        if slWhy != "wick CE" and (isL ? slC < en : slC > en)
-            alt += " · wick CE " + f_prc(slC) + " (" + str.tostring(math.abs(en - slC), "#.##") + ")"
-        if slWhy != "iFVG edge" and slWhy != "CISD edge" and (isL ? slE < en : slE > en)
-            alt += (cd ? " · CISD edge " : " · iFVG edge ") + f_prc(slE) + " (" + str.tostring(math.abs(en - slE), "#.##") + ")"
-        if alt != ""
-            tip += "\nother stops" + alt
-        // management (rulebook section 10)
-        tip += "\n\nmanagement"
-        tip += "\nBE " + (na(beP) ? "· no internal structure before TP1" : "at " + beN + " " + f_prc(beP) + " (" + str.tostring(math.abs(beP - en) / risk, "#.#") + "R)")
-        if dol
-            tip += "\npartial · " + (r1 >= 1.5 ? "half at TP1 (" + str.tostring(r1, "#.#") + "R)" : "TP1 under 1.5R → half at 2R " + f_prc(p2R))
-        tip += "\ntime exits (hold the runner toward them while price expands): 15m " + str.format_time(nx15, "HH:mm", NY) + " · 30m " + str.format_time(nx30, "HH:mm", NY) + " · 1H " + str.format_time(nx60, "HH:mm", NY)
-        tip += "\nrunner TP2 " + (na(tp2) ? "· no further draw" : "· " + tp2N + " " + f_prc(tp2) + " (" + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R)")
-        tip += "\n" + str.tostring(n) + " contracts at $" + str.tostring(riskUsd) + (wide ? " · STOP WIDER THAN " + str.tostring(maxStop) + " PTS" : "") + (n < 1 ? " · SIZE 0" : "")
-        tip += "\n\nthe checklist decides, not the indicator"
         // simple tooltip: plan + only what is missing
         string miss2 = ""
         if not (s.key or intSw)
@@ -1509,8 +1442,37 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         if iHCOn
             tipS += "\nHTF CISD: " + (hcOk ? hcWhich : "none fresh") + " (info only)"
         tipS += "\n\nswept: " + s.dt
-        if iDet == "Simple"
-            tip := tipS
+        // Full keeps a compact checklist and plan instead of compiling a second,
+        // mostly duplicated long-form explanation for every setup path.
+        string tip = tipS
+        if iDet == "Full"
+            tip += "\n\nCHECKS"
+            tip += "\n" + f_ck(s.key or intSw) + "sweep " + s.dt
+            tip += "\n" + f_ck(hiOk or cd or jud) + "highest iFVG" + pdTxt
+            tip += "\n" + f_ck(vsh or cd) + "V-shape " + str.tostring(bar_index - s.extB) + " bars"
+            tip += "\n" + f_ck(disp) + "displacement · " + str.tostring(body, "#.##") + " pts body, " + str.tostring(clr, "#.##") + " pts clear"
+            tip += "\n" + f_ck(delOk) + "HTF delivery" + (htf ? " · " + htfN : "")
+            tip += "\n" + f_ck(dol) + "target" + (dol ? " · " + tpN : "")
+            tip += "\n" + f_ck(lrOk) + "LRL " + str.tostring(lrN) + "/" + str.tostring(lrNeed)
+            tip += "\n" + f_ck(not intTk) + "internal liq. untouched"
+            tip += "\n" + f_ck(ttOk) + ttTx
+            tip += "\n" + f_ck(tsOk) + "T-Spot " + (tsOk ? f_prc(tsBot) + "–" + f_prc(tsTop) : "missing/outside")
+            tip += "\n" + f_ck(cisd) + "CISD" + (na(cLvl) ? "" : " " + f_prc(cLvl))
+            tip += "\n" + f_ck(div) + "volume divergence"
+            tip += "\n" + f_ck(smtP) + "SMT/PSP" + (smtOn ? " " + pairRoot : " (off)")
+            if smtOn and iEsChk
+                [esOk, esN] = f_esDel(d, s.pairX)
+                int fs = cd ? 2 : f_fsmt(g.bull, g.b, g.tf)
+                tip += "\n" + f_ck(esOk) + pairRoot + " delivery" + (esOk ? " " + esN : "")
+                tip += fs == 2 ? "" : "\n" + f_ck(fs == 1) + "pair printed gap"
+            if iHCOn
+                tip += "\nHTF CISD " + (hcOk ? hcWhich : "none fresh") + " (info only)"
+            tip += "\n" + f_ck(bOk) + "bias" + (pre ? " · PRE" : "") + (inMacro ? " · macro" : "")
+            tip += "\nstop " + slWhy + " · BE " + (na(beP) ? "none" : beN + " " + f_prc(beP))
+            tip += "\npartial " + (dol ? (r1 >= 1.5 ? "half TP1" : "half 2R " + f_prc(p2R)) : "no target")
+            tip += "\nexits 15m " + str.format_time(nx15, "HH:mm", NY) + " · 30m " + str.format_time(nx30, "HH:mm", NY) + " · 1H " + str.format_time(nx60, "HH:mm", NY)
+            tip += "\n" + str.tostring(n) + " contracts" + (wide ? " · WIDE STOP" : "")
+
         color c = not okWin ? color.gray : isL ? iLong : iShort
         St st = St.new(ln = array.new<line>(), tl = array.new<label>(), tc = array.new<label>())
         st.stopPx := sl
@@ -2443,11 +2405,10 @@ if barstate.islast and iPanel and iStageRow
         bool lActive = swL.on and not swL.xl
         if sActive or lActive
             bool isL = lActive and (not sActive or swL.extB >= swS.extB)
-            Sw activeSw = isL ? swL : swS
-            [sg, _, sp, st, _, _, _, _, _, _, _, _, _, _] = f_preview(isL ? 1 : -1, activeSw)
-            string side = isL ? "L " : "S "
-            stageText := na(sp) ? side + "SWEEP · WAIT TRIGGER" : sg < 0 ? side + "TRIGGER · PLAN NOT READY" : sg >= math.max(minG, 1) ? side + "ARMED " + f_gT(sg) + " " + st + " · WAIT CLOSE" : side + "TRIGGER · " + (iMinG == "B" ? "B STUDY ONLY" : "PREVIEW BELOW " + iMinG)
-            stageColor := sg >= math.max(minG, 1) and not na(sp) ? cOk : cMu
+            // Reuse the existing preview drawing, not another f_preview() evaluation.
+            string previewText = pLb.size() > 0 ? label.get_text(pLb.last()) : ""
+            stageText := previewText != "" ? str.substring(previewText, 0, math.min(32, str.length(previewText))) : (isL ? "L " : "S ") + "SWEEP · WAIT TRIGGER"
+            stageColor := previewText != "" ? cOk : cMu
         else
             stageText := "WAIT · NO ACTIVE SWEEP"
 // A table is screen-anchored; the auto corner follows chart TF, not the viewport's empty right margin.
