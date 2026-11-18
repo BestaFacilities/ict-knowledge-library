@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.56 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.57 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.56", shorttitle = "SNM+ 3.56", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.57", shorttitle = "SNM+ 3.57", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -123,8 +123,9 @@ int iHCFresh = input.int(60, "Context valid for (minutes)", minval = 5, maxval =
 int iHCKeep = input.int(4, "Confirmed lines kept total", minval = 1, maxval = 12, group = G_HC, tooltip = "Global cap across both timeframes and directions; old labels and lines are deleted when this cap is reached.")
 const string G_T = "HTF candles (TTrades view)"
 bool iTtView = input.bool(true, "Show the HTF candles on the right", group = G_T, tooltip = "the last 3 closed HTF candles + the one forming, at real prices, to the right of the chart. the pairing (15m on 1m…) is set in Confluence")
-int iTtX = input.int(50, "Start (candles right of the last bar)", minval = 20, maxval = 300, group = G_T)
-int iTtW = input.int(5, "Candle width (bars, odd)", minval = 3, maxval = 21, step = 2, inline = "tw", group = G_T)
+string iTtLayout = input.string("Auto (compact)", "HTF candle spacing", options = ["Auto (compact)", "Manual (3.56)"], group = G_T, tooltip = "Auto keeps the four-candle strip near the last bar and narrows it on higher chart timeframes. Manual restores the 3.56 Start / width / gap inputs below. Drawing only: closure, T-Spot, grade, alerts and timeframe pairing are unchanged. Pine cannot change chart zoom or TradingView's right margin.")
+int iTtX = input.int(50, "Manual start (bars right)", minval = 20, maxval = 300, group = G_T)
+int iTtW = input.int(5, "Manual width (bars, odd)", minval = 3, maxval = 21, step = 2, inline = "tw", group = G_T)
 int iTtGap = input.int(3, "gap", minval = 1, maxval = 10, inline = "tw", group = G_T)
 bool iTtForm = input.bool(true, "Show the candle forming", group = G_T)
 color iTtBull = input.color(#26A69A, "Bull", inline = "tc", group = G_T)
@@ -170,7 +171,7 @@ string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"
 string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean"], group = G_D, tooltip = "Clean is display only: one nearest level and gap per side, one gap containing price, no timing ribbon, HTF candle display, HTF open, T-Spot boxes or NWOG drawing; the status line, D/T/E simple checklist, active preview, confirmed setups, diagnostics if enabled, calculations and alerts remain. Current keeps the 3.54 drawing density; the 3.55 text/count corrections apply in both views.")
 bool cleanView = iView == "Clean"
 bool iPanel = input.bool(true, "Checklist panel", inline = "pn", group = G_D)
-string iPos = input.string("Bottom Right", "", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D)
+string iPos = input.string("Auto", "", options = ["Auto", "Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D, tooltip = "Auto puts the checklist at middle right on 1m–5m charts so it is nearer the live price row, and bottom right on slower charts. Choose a fixed position to restore the 3.56 bottom-right placement or avoid overlap with other indicators. Tables follow chart corners, not price bars.")
 string iSz = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G_D)
 string iTheme = input.string("Auto", "Theme", options = ["Auto", "Dark", "Light"], group = G_D, tooltip = "Auto reads your chart background")
 string iLbl = input.string("Pills", "Setup labels", options = ["Pills", "Text"], group = G_D, tooltip = "Pills = solid coloured tag, readable on any background")
@@ -2157,10 +2158,11 @@ if barstate.islast
         color cBe = f_adj(iTtBear)
         color cWk = f_adj(iTtWick)
         // an odd width keeps the wick exactly on the body's middle bar: the body spans bars xl .. xl + w - 1, the wick sits on xl + (w - 1) / 2
-        int w = iTtW % 2 == 0 ? iTtW + 1 : iTtW
+        bool autoStrip = iTtLayout == "Auto (compact)"
+        int w = autoStrip ? (cm <= 5 ? 5 : 3) : iTtW % 2 == 0 ? iTtW + 1 : iTtW
         int hw = int((w - 1) / 2)
-        int step = w + iTtGap
-        int x0 = bar_index + iTtX
+        int step = w + (autoStrip ? (cm <= 5 ? 3 : 2) : iTtGap)
+        int x0 = bar_index + (autoStrip ? (cm <= 1 ? 24 : cm <= 5 ? 18 : 12) : iTtX)
         // closure type of each closed candle against the one before it
         array<string> ty = array.new<string>(5, "")
         for k = 1 to 3
@@ -2413,10 +2415,12 @@ if barstate.islast and iDiag
     diagTb.cell(0, 0, "iFVG why-not: " + (diagLast.get(0) == "" ? "waiting for registered gap inversion" : diagLast.get(0)), text_color = cTx, bgcolor = color.new(cPan, 8), text_size = size.small, text_halign = text.align_left)
 
 // ───────── checklist panel (ManipulationX style)
+// A table is screen-anchored; the auto corner follows chart TF, not the viewport's empty right margin.
+panelPosition = iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Middle Right" or (iPos == "Auto" and cm <= 5) ? position.middle_right : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right
 var table tb = table.new(position.bottom_right, 2, 19, border_width = 0)
 if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     tb.clear(0, 0, 1, 18)
-    tb.set_position(iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right)
+    tb.set_position(panelPosition)
     tb.set_bgcolor(cPan)
     tb.set_frame_color(cFrm)
     tb.set_frame_width(1)
@@ -2433,7 +2437,7 @@ if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     tb.cell(0, 4, "Today", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 4, "A+ " + str.tostring(ui.nAp) + " · A " + str.tostring(ui.nA) + " · max 2 trades", text_color = ui.nAp + ui.nA > 2 ? cWarn : cTx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
 if barstate.islast and iPanel and iDet == "Full" and not cleanView
-    tb.set_position(iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right)
+    tb.set_position(panelPosition)
     color tx = cTx
     color mu = cMu
     tb.set_bgcolor(cPan)
