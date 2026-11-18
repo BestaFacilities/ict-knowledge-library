@@ -1,5 +1,5 @@
 //@version=6
-// SNM+ 3.59 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.60 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +22,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.59", shorttitle = "SNM+ 3.59", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.60", shorttitle = "SNM+ 3.60", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -171,7 +171,7 @@ string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"
 string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean"], group = G_D, tooltip = "Clean is display only: one nearest level and gap per side, one gap containing price, no timing ribbon, HTF candle display, HTF open, T-Spot boxes or NWOG drawing; the status line, D/T/E simple checklist, active preview, confirmed setups, diagnostics if enabled, calculations and alerts remain. Current keeps the 3.54 drawing density; the 3.55 text/count corrections apply in both views.")
 bool cleanView = iView == "Clean"
 bool iPanel = input.bool(true, "Checklist panel", inline = "pn", group = G_D)
-bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only: shows the latest evaluated iFVG or Sweep + CISD trigger on this bar, otherwise the active sweep / existing ARMED/FORMING preview (if enabled) / wait state. A reason is only a known first blocker from existing checks; no raw-gap or wick-only detector is added. ELIGIBLE means the indicator's alert gates pass, not that a TradingView alert was delivered. Off draws no new row.")
+bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only: shows a confirmed evaluated trigger on this bar, or PREV CLOSE for just the next bar, then the active sweep / preview / wait state. Known blockers only; no raw-gap detector. ELIGIBLE is alert eligibility, not delivery. Off draws no new row.")
 string iPos = input.string("Auto", "", options = ["Auto", "Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D, tooltip = "Auto puts the checklist at middle right on 1m–5m charts so it is nearer the live price row, and bottom right on slower charts. Choose a fixed position to restore the 3.56 bottom-right placement or avoid overlap with other indicators. Tables follow chart corners, not price bars.")
 string iSz = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G_D)
 string iTheme = input.string("Auto", "Theme", options = ["Auto", "Dark", "Light"], group = G_D, tooltip = "Auto reads your chart background")
@@ -2396,6 +2396,10 @@ if barstate.islast and iPanel and iStageRow
     if ui.stageB == bar_index and barstate.isconfirmed
         stageText := ui.stageMsg
         stageColor := str.contains(stageText, "BLOCK") or str.contains(stageText, "NO ALERT") or str.contains(stageText, "REJECTED") or str.contains(stageText, "STUDY") ? cWarn : cOk
+    else if ui.stageB >= 0 and ui.stageB == bar_index - 1
+        // Closed-bar state persists across realtime rollback; never label a live evaluation confirmed.
+        stageText := "PREV CLOSE · " + ui.stageMsg
+        stageColor := cMu
     else if inNews
         stageText := "WAIT · NEWS BLACKOUT"
     else if not inWin
@@ -2434,7 +2438,7 @@ if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     tb.cell(1, 4, "A+ " + str.tostring(ui.nAp) + " · A " + str.tostring(ui.nA) + " · max 2 trades", text_color = ui.nAp + ui.nA > 2 ? cWarn : cTx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     if iStageRow
         tb.cell(0, 5, "Now", text_color = cTx, text_size = pSz, text_halign = text.align_left)
-        tb.cell(1, 5, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Last evaluated trigger on this bar, otherwise live sweep/preview. Preview assumes displacement; wait for a close. ELIGIBLE does not mean an alert was delivered. D/T/E above describes the last shown setup.")
+        tb.cell(1, 5, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Current confirmed evaluation wins; PREV CLOSE is the preceding chart bar's close, shown for one bar only. Otherwise live sweep/preview. ELIGIBLE is not alert delivery. D/T/E describes the last shown setup.")
 if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.set_position(panelPosition)
     color tx = cTx
@@ -2472,5 +2476,5 @@ if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.cell(1, 18, iTrack ? (ui.dR >= 0 ? "+" : "") + str.tostring(ui.dR, "#.##") + "R · " + str.tostring(ui.nTk) + " / 2 trades" : "", text_color = ui.dR >= 0 ? cOk : cBad, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     if iStageRow
         tb.cell(0, 19, "Now", text_color = tx, text_size = pSz, text_halign = text.align_left)
-        tb.cell(1, 19, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Last evaluated trigger on this bar, otherwise live sweep/preview. Preview assumes displacement; wait for a close. ELIGIBLE does not mean an alert was delivered. Rows above describe the last shown setup.")
+        tb.cell(1, 19, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Current confirmed evaluation wins; PREV CLOSE is the preceding chart bar's close, shown for one bar only. Otherwise live sweep/preview. ELIGIBLE is not alert delivery. Rows above describe the last shown setup.")
     tb.cell(1, 14, (inNews ? "NEWS" : inMacro ? "macro" : inWin ? "in window" : "outside windows") + (inWin and not na(minLeft) ? " · " + str.tostring(minLeft) + " min left" : ""), text_color = inNews ? cWarn : inWin ? cOk : mu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)

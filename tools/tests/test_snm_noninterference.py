@@ -5,6 +5,7 @@ Run with hoox-pyne installed: python tools/tests/test_snm_noninterference.py
 The 3.59 token-budget pass deliberately condenses Full tooltip text and removes
 one dead display-only variable, so comparison excludes those nodes. The Simple
 tooltip, setup/grade/alert paths and preview function must remain AST-identical.
+3.60 additionally guards the one-bar historical Now row against the 3.59 AST.
 This is not TradingView compilation, visual or live-alert verification.
 """
 from pathlib import Path
@@ -13,6 +14,7 @@ import subprocess
 from pynescript.ast import dump, parse, unparse
 
 BASE = "458dbf8cd0b48a14fcd586195209d66e6c417d96"
+ROW_BASE = "e53a2f4"
 ROOT = Path(__file__).resolve().parents[2]
 CURRENT = ROOT / "tools/snm-plus.pine"
 
@@ -50,6 +52,26 @@ def projection(tree):
     return nodes
 
 
+def stage_if(tree):
+    blocks = [node for node in tree.body if head(node) == "if barstate.islast and iPanel and iStageRow"]
+    assert len(blocks) == 1
+    return blocks[0].value.body[0].value
+
+
+def check_previous_close(old_tree, new_tree):
+    """The added read-only branch must expire after exactly one bar and never win over this close."""
+    before = stage_if(old_tree)
+    now = stage_if(new_tree)
+    assert unparse(now.test) == "ui.stageB == bar_index and barstate.isconfirmed"
+    assert [dump(n) for n in now.body] == [dump(n) for n in before.body], "current-bar result or warning colour changed"
+    assert len(now.orelse) == 1
+    previous = now.orelse[0].value
+    assert unparse(previous.test) == "ui.stageB >= 0 and ui.stageB == bar_index - 1"
+    fixture = parse('stageText := "PREV CLOSE · " + ui.stageMsg\nstageColor := cMu\n')
+    assert [dump(n) for n in previous.body] == [dump(n) for n in fixture.body], "historical row must be labelled and muted"
+    assert [dump(n) for n in previous.orelse] == [dump(n) for n in before.orelse], "live wait/preview fallback changed"
+
+
 def main():
     old = subprocess.check_output(["git", "show", BASE + ":tools/snm-plus.pine"], cwd=ROOT, text=True)
     new = CURRENT.read_text()
@@ -64,7 +86,19 @@ def main():
     assert old.count(probe) == 1
     broken = parse(old.replace(probe, probe.replace("gN >= minG", "gN > minG"), 1))
     assert expected != projection(broken), "positive control missed changed grade gate"
-    print("PASS: unchanged setup/grade/alert + Simple tooltip AST; mutated grade gate detected")
+    row_old = subprocess.check_output(["git", "show", ROW_BASE + ":tools/snm-plus.pine"], cwd=ROOT, text=True)
+    row_before = parse(row_old)
+    check_previous_close(row_before, current)
+    guard = "ui.stageB >= 0 and ui.stageB == bar_index - 1"
+    assert new.count(guard) == 1
+    too_long = parse(new.replace(guard, "ui.stageB >= 0 and ui.stageB >= bar_index - 1", 1))
+    try:
+        check_previous_close(row_before, too_long)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("positive control missed non-expiring historical row")
+    print("PASS: unchanged setup/grade/alert + Simple tooltip AST; 3.60 one-bar row; grade and expiry mutations detected")
 
 
 if __name__ == "__main__":
