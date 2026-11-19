@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Pine AST regression for SNM+ 3.64's display-only MX Lite pass.
+"""Pine AST regression for SNM+ 3.65's display-only checklist-clarity pass.
 
 Run with hoox-pyne installed: python tools/tests/test_snm_noninterference.py
 The active setup/grade/alert baseline is 3.63. The projection omits the existing
 read-only stage row plus this pass's setup-drawing construction, older-drawing
-mute, and tracker-tag visibility bookkeeping. It retains the setup gate, tooltip,
-tracker outcomes, UI/checklist state and alert AST. 3.60's one-bar
-historical Now row is still guarded against the 3.59 AST. This is not TradingView
-compilation, visual or live-alert verification.
+mute, tracker-tag visibility bookkeeping, and the panel's checklist state values
+(pv) whose TTFM entry now reports 3 (not assessed) when TTFM is Off instead of
+0 (fail). It retains the setup gate, tooltip, tracker outcomes, UI/checklist
+state and alert AST. 3.60's one-bar historical Now row is still guarded against
+the 3.59 AST. This is not TradingView compilation, visual or live-alert
+verification.
 """
 from pathlib import Path
 import subprocess
@@ -50,6 +52,10 @@ def projection(tree):
             nodes.append(dump(node))
             continue
         children = node.value.body  # Expr(If(...)) in pynescript's real Pine AST
+        # 3.65: checklist state values (pv) are display-only; the TTFM entry
+        # now reports 3 (not assessed) when TTFM is Off. Panel rendering is
+        # covered by the checklist-clarity regression.
+        children = [c for c in children if not head(c).startswith("pv.push(")]
         heads = [head(c) for c in children]
         render = next(i for i, h in enumerate(heads) if h.startswith("color c ="))
         tracking = next(i for i, h in enumerate(heads) if h == "if iTrack and okWin")
@@ -114,7 +120,7 @@ def main():
         pass
     else:
         raise AssertionError("positive control missed non-expiring historical row")
-    print("PASS: unchanged 3.63 setup/grade/tracker/alert AST; grade, alert and 3.60 row-expiry mutations detected")
+    print("PASS: unchanged 3.63 setup/grade/tracker/alert AST (checklist pv display values excluded); grade, alert and 3.60 row-expiry mutations detected")
 
 
 if __name__ == "__main__":

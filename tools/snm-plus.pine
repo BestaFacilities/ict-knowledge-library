@@ -1,6 +1,6 @@
 //@version=6
-// SNM+ 3.64 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
-// 3.64 adds a display-only MX Lite view; 3.63 uses one NY session and date-stamped NY / Asia / London level labels.
+// SNM+ 3.65 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.65 clarifies the checklist panel: LAST SETUP vs NOW labels, explicit n/a for disabled checks (TTFM off, SMT off), "–" for no data yet; 3.64 adds a display-only MX Lite view.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -23,7 +23,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.64", shorttitle = "SNM+ 3.64", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.65", shorttitle = "SNM+ 3.65", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -1674,7 +1674,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             pv.push(disp ? 1 : 0)
             pv.push(htf ? 1 : 0)
             pv.push(dol ? 1 : 0)
-            pv.push(ttOk ? 1 : 0)
+            pv.push(iTtF == "Off" ? 3 : ttOk ? 1 : 0)
             pv.push(cisd ? 1 : 0)
             pv.push(div ? 1 : 0)
             pv.push(smtOn ? (smtP ? 1 : 0) : 2)
@@ -2548,9 +2548,9 @@ if barstate.islast and iPanel and iStageRow
             stageText := "WAIT · NO ACTIVE SWEEP"
 // A table is screen-anchored; the auto corner follows chart TF, not the viewport's empty right margin.
 panelPosition = iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Middle Right" or (iPos == "Auto" and cm <= 5) ? position.middle_right : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right
-var table tb = table.new(position.bottom_right, 2, 20, border_width = 0)
+var table tb = table.new(position.bottom_right, 2, 21, border_width = 0)
 if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
-    tb.clear(0, 0, 1, 19)
+    tb.clear(0, 0, 1, 20)
     tb.set_position(panelPosition)
     tb.set_bgcolor(cPan)
     tb.set_frame_color(cFrm)
@@ -2558,18 +2558,21 @@ if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     color hc2 = str.startswith(ui.dir, "LONG") ? iLong : str.startswith(ui.dir, "SHORT") ? iShort : cNeu
     tb.cell(0, 0, "SNM+ " + ui.dir, text_color = f_on(hc2), bgcolor = hc2, text_size = hSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 0, ui.grade, text_color = f_on(hc2), bgcolor = hc2, text_size = hSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    array<string> rn = array.from("D  delivery", "T  target", "E  execution")
+    tb.cell(0, 1, "LAST SETUP", text_color = cMu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 1, "", text_size = pSz)
+    tb.cell(0, 3, "D  delivery", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 3, rv.get(0) + (ro.get(0) == 1 ? "  ✔" : ro.get(0) == 0 ? "  ✖" : "  –"), text_color = ro.get(0) == 1 ? cOk : ro.get(0) == 0 ? cBad : cMu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 4, "T  target", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 4, rv.get(1) + (ro.get(1) == 1 ? "  ✔" : ro.get(1) == 0 ? "  ✖" : "  –"), text_color = ro.get(1) == 1 ? cOk : ro.get(1) == 0 ? cBad : cMu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 5, "E  execution", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 5, rv.get(2) + (ro.get(2) == 1 ? "  ✔" : ro.get(2) == 0 ? "  ✖" : "  –"), text_color = ro.get(2) == 1 ? cOk : ro.get(2) == 0 ? cBad : cMu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     array<string> rv = array.from(ui.sD, ui.sT, ui.sE)
     array<int> ro = array.from(ui.okD, ui.okT, ui.okE)
-    for r = 0 to 2
-        int v = ro.get(r)
-        tb.cell(0, r + 1, rn.get(r), text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-        tb.cell(1, r + 1, rv.get(r) + (v == 1 ? "  ✔" : v == 0 ? "  ✖" : ""), text_color = v == 1 ? cOk : v == 0 ? cBad : cMu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    tb.cell(0, 4, "Today", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-    tb.cell(1, 4, "A+ " + str.tostring(ui.nAp) + " · A " + str.tostring(ui.nA) + " · max 2 trades", text_color = ui.nAp + ui.nA > 2 ? cWarn : cTx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 6, "Today", text_color = cTx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 6, "A+ " + str.tostring(ui.nAp) + " · A " + str.tostring(ui.nA) + " · max 2 trades", text_color = ui.nAp + ui.nA > 2 ? cWarn : cTx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     if iStageRow
-        tb.cell(0, 5, "Now", text_color = cTx, text_size = pSz, text_halign = text.align_left)
-        tb.cell(1, 5, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
+        tb.cell(0, 7, "NOW", text_color = cTx, text_size = pSz, text_halign = text.align_left)
+        tb.cell(1, 7, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
 if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.set_position(panelPosition)
     color tx = cTx
@@ -2581,22 +2584,24 @@ if barstate.islast and iPanel and iDet == "Full" and not cleanView
     array<string> nm = array.from("V-shape", "Displacement", "HTF delivery", "Draw on liquidity", ttNm + " closure (TTFM)", "CISD", "Volume divergence", "SMT / PSP")
     tb.cell(0, 0, "SNM+ " + ui.dir, text_color = f_on(hc), bgcolor = hc, text_size = hSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 0, ui.grade, text_color = f_on(hc), bgcolor = hc, text_size = hSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    tb.cell(0, 1, "Bias", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-    tb.cell(1, 1, iBias, text_color = iBias == "Bullish" ? iLong : iBias == "Bearish" ? iShort : tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    tb.cell(0, 2, "Swept", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-    tb.cell(1, 2, ui.swept, text_color = tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    tb.cell(0, 3, "iFVG", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-    tb.cell(1, 3, pv.size() > 0 ? ui.fv + (ui.fvOk ? " ✔" : " ✖") : "–", text_color = pv.size() > 0 and not ui.fvOk ? cBad : cOk, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 1, "LAST SETUP", text_color = mu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 1, "", text_size = pSz)
+    tb.cell(0, 2, "Bias", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 2, iBias, text_color = iBias == "Bullish" ? iLong : iBias == "Bearish" ? iShort : tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 3, "Swept", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 3, ui.swept, text_color = tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 4, "iFVG", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 4, pv.size() > 0 ? ui.fv + (ui.fvOk ? " ✔" : " ✖") : "–", text_color = pv.size() > 0 and not ui.fvOk ? cBad : cOk, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     for r = 0 to 7
         int v = r < pv.size() ? pv.get(r) : 2
-        int row = r < 4 ? 4 + r : 9 + (r - 4)
+        int row = r < 4 ? 5 + r : 10 + (r - 4)
         tb.cell(0, row, nm.get(r), text_color = r < 4 ? tx : mu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-        tb.cell(1, row, v == 1 ? "✔" : v == 0 ? "✖" : "–", text_color = v == 1 ? cOk : v == 0 ? cBad : mu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    tb.cell(0, 8, "confluence", text_color = mu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-    tb.cell(1, 8, "", text_size = pSz)
-    tb.cell(0, 13, "When", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
-    tb.cell(1, 13, ui.tm + (ui.when == "-" ? "" : " · " + ui.when), text_color = tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    tb.cell(0, 14, "Now", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+        tb.cell(1, row, v == 1 ? "✔" : v == 0 ? "✖" : v == 3 ? "n/a" : "–", text_color = v == 1 ? cOk : v == 0 ? cBad : mu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 9, "confluence", text_color = mu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 9, "", text_size = pSz)
+    tb.cell(0, 14, "When", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
+    tb.cell(1, 14, ui.tm + (ui.when == "-" ? "" : " · " + ui.when), text_color = tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
+    tb.cell(0, 14, "NOW", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(0, 16, "LRL touches", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 16, ui.lrl + (ui.lrOk == 1 ? " ✔" : ui.lrOk == 0 ? " ✖" : ""), text_color = ui.lrOk == 1 ? cOk : ui.lrOk == 0 ? cBad : mu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     tb.cell(0, 15, "Internal liq.", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
@@ -2606,6 +2611,6 @@ if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.cell(0, 18, iTrack ? "Auto R today" : "", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 18, iTrack ? (ui.dR >= 0 ? "+" : "") + str.tostring(ui.dR, "#.##") + "R · " + str.tostring(ui.nTk) + " / 2 trades" : "", text_color = ui.dR >= 0 ? cOk : cBad, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     if iStageRow
-        tb.cell(0, 19, "Now", text_color = tx, text_size = pSz, text_halign = text.align_left)
-        tb.cell(1, 19, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
+        tb.cell(0, 20, "NOW", text_color = tx, text_size = pSz, text_halign = text.align_left)
+        tb.cell(1, 20, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
     tb.cell(1, 14, (inNews ? "NEWS" : inMacro ? "macro" : inWin ? "in window" : "outside windows") + (inWin and not na(minLeft) ? " · " + str.tostring(minLeft) + " min left" : ""), text_color = inNews ? cWarn : inWin ? cOk : mu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)

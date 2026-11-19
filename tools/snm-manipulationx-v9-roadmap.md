@@ -1,8 +1,8 @@
-// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.64).
+// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.65).
 
 # Prioritized ManipulationX V9 → SNM+ roadmap
 
-**Status:** Priority 1 / Stage 1 is implemented as display-only in SNM+ 3.64; the remaining items are recommendations. This roadmap is based on `tools/snm-manipulationx-v9-comparison.md`, the user's 11 screenshots (`image-38.png`–`image-48.png`) and video transcript, and SNM+ 3.63 as the implementation baseline. No V9 code is being ported. Stage 1 does not change setup qualification, C/RB/RV model labels, D/T/E grading, targets, risk management, alerts, session rules, or timeframe behavior.
+**Status:** Priority 1 / Stage 1 is implemented as display-only in SNM+ 3.64 and Stage 2 (checklist clarity) in SNM+ 3.65; the remaining items are recommendations. This roadmap is based on `tools/snm-manipulationx-v9-comparison.md`, the user's 11 screenshots (`image-38.png`–`image-48.png`) and video transcript, and SNM+ 3.63 as the implementation baseline. No V9 code is being ported. Stage 1 does not change setup qualification, C/RB/RV model labels, D/T/E grading, targets, risk management, alerts, session rules, or timeframe behavior.
 
 The screenshots show one saved V9 configuration, not verified factory defaults. In particular, the V9 screenshot and narration disagree about HTF FVG mitigation (50% / wicks versus 100% / close). Treat that donor rule as unresolved. The V9 performance and non-repainting claims are also unverified.
 
@@ -10,7 +10,7 @@ The screenshots show one saved V9 configuration, not verified factory defaults. 
 
 1. **Start with SNM+ 3.64's existing Clean view** for a lighter chart; it remains display-only. No new feature is needed to try this.
 2. **MX Lite is now available in 3.64** as an opt-in compact display profile with independent setup-tag/trigger-zone visibility and a latest-setup-only drawing option. Current remains the default and Clean remains available.
-3. Improve the compact checklist by reusing SNM+'s existing checks and clearly labelling **Last setup** separately from **Now**. This is information design, not a new qualification layer.
+3. **Checklist clarity is implemented in 3.65:** the panel reuses SNM+'s existing checks and labels **LAST SETUP** separately from **NOW**, with explicit n/a / – states. This is information design, not a new qualification layer.
 4. Treat the 8AM/9AM candle ranges and standalone event alerts as **later, separately specified proposals**. Their definitions or alert events are not complete enough to implement safely from the screenshots alone.
 5. **Do not import V9 filters, grades, LRL/HRL constructions, mitigation rules, or performance claims as SNM+ behavior.**
 
@@ -49,9 +49,9 @@ Try Clean and the settings above first. Keep `SMT sibling = Auto` for the suppor
 
 `Display → Chart view = MX Lite` now uses the existing Clean-style compact auxiliary drawings and, by default, mutes older confirmed setup drawings. The independent `Show setup labels` and `Show setup zones / iFVGs` switches default On; `Latest setup only (MX Lite)` defaults On but is ignored in Current and Clean. Current remains the default and retains the previous 3.63 drawing density; Clean remains available. None of these controls uses `Show setups from grade` as a hide switch, changes `iKeep`, deletes records/tracker IDs, or recalculates a different setup. Local AST/parser/lint checks pass, and the user confirmed the fixed build compiles in TradingView (CW10026/CW10003/CE10117 resolved). Toggle-on/off rendering, object retention and matched replay are still to be verified in TradingView before treating visual behavior as chart-verified.
 
-### Stage 2 — checklist clarity
+### Stage 2 — implemented in 3.65
 
-Build from the current Full-panel and Now-row values, not new detectors. Every status must state what it refers to and whether the condition is applicable/assessed. A missing or disabled confluence check is not an automatic fail. The panel must distinguish the last completed setup from current/previous-close context and must not imply that `ELIGIBLE` guarantees TradingView alert delivery.
+Built from the existing Full-panel and Now-row values, not new detectors. The panel now has a muted **LAST SETUP** header directly under the `SNM+ LONG/SHORT · grade` header, above the D/T/E rows (Simple) and the eight checklist rows (Full); the state row is labelled **NOW** in both panels. Checklist states are explicit: **✔** pass, **✖** fail, **n/a** when the check is disabled (TTFM closure with `TTFM → Off`; SMT/PSP with SMT off), and **–** when there is no data yet. A disabled or unavailable check no longer reads as a failure. D/T/E meanings, grades, the one-bar `PREV CLOSE` behaviour, confirmed-bar priority, setup qualification, targets and alerts are unchanged; no new input was added. The Now-row tooltip still states that `ELIGIBLE` is not alert delivery. Local AST/parser/lint checks pass; TradingView compile/render/replay remain to be verified.
 
 ### Stage 3 — only after definitions / request
 
@@ -67,4 +67,4 @@ For the implemented 3.64 view and any later display-only work:
 4. Run local Pine lint/parser/AST checks, then compile and inspect the rendered chart in TradingView. Local checks do not verify TradingView's compiler token budget, replay rendering, or alert delivery. Any new event alerts need forward-bar/alert-log checks separately.
 5. Compare across the user's relevant pairs and timeframes without requiring manual retuning when switching chart TF. Keep pair-specific risk guidance and Auto/Fixed context documented in `tools/snm-settings-by-pair.md`.
 
-**Decision:** Stage 1's display simplification is implemented in 3.64; the compact checklist refinement, new candle-range levels and standalone alert categories remain separate proposals. No SNM+ model semantics were changed.
+**Decision:** Stage 1's display simplification is implemented in 3.64 and Stage 2's checklist clarity in 3.65; new candle-range levels and standalone alert categories remain separate proposals. No SNM+ model semantics were changed.

@@ -2,7 +2,9 @@
 """AST regression for the SNM+ 3.64 MX Lite display-only controls.
 
 Run with hoox-pyne installed: python tools/tests/test_snm_mx_lite.py
-The test compares the active 3.63 source with 3.64. MX Lite is opt-in; the
+The test compares the active 3.63 source with 3.64 (3.65 only renames the
+version string and clarifies the checklist panel; see the checklist-clarity
+regression). MX Lite is opt-in; the
 independent visibility controls are default-On and non-destructive. The test
 checks the drawing mute, retained tracker objects, and reuse of the prior Clean
 layout conditions without changing setup logic. It cannot verify TradingView
@@ -64,7 +66,7 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    assert 'indicator("SNM+ 3.64", shorttitle = "SNM+ 3.64"' in new_source
+    assert 'indicator("SNM+ 3.6' in new_source and '", shorttitle = "SNM+ 3.6' in new_source
     assert 'input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean", "MX Lite"]' in new_source
     assert 'bool cleanView = iView == "Clean"' in new_source
     assert 'bool mxLiteView = iView == "MX Lite"' in new_source
