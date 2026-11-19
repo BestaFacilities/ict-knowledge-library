@@ -45,9 +45,9 @@ For a no-code first trial on the current build, choose `Display → Chart view =
 
 Try Clean and the settings above first. Keep `SMT sibling = Auto` for the supported NQ/ES and MNQ/MES pairs; on other instruments leave SMT off or select a confirmed valid manual feed. Keep the current Fixed HTF gap slots unless deliberately choosing Auto. These pair/timeframe choices are documented in `tools/snm-settings-by-pair.md`; no manual setting change should be required just because the chart timeframe changes.
 
-### Stage 1 — implemented in 3.64; TradingView check pending
+### Stage 1 — implemented in 3.64; TradingView compilation verified
 
-`Display → Chart view = MX Lite` now uses the existing Clean-style compact auxiliary drawings and, by default, mutes older confirmed setup drawings. The independent `Show setup labels` and `Show setup zones / iFVGs` switches default On; `Latest setup only (MX Lite)` defaults On but is ignored in Current and Clean. Current remains the default and retains the previous 3.63 drawing density; Clean remains available. None of these controls uses `Show setups from grade` as a hide switch, changes `iKeep`, deletes records/tracker IDs, or recalculates a different setup. Local AST/parser/lint checks pass. Verify toggle-on/off, object retention and matched replay in TradingView before treating visual behavior as chart-verified.
+`Display → Chart view = MX Lite` now uses the existing Clean-style compact auxiliary drawings and, by default, mutes older confirmed setup drawings. The independent `Show setup labels` and `Show setup zones / iFVGs` switches default On; `Latest setup only (MX Lite)` defaults On but is ignored in Current and Clean. Current remains the default and retains the previous 3.63 drawing density; Clean remains available. None of these controls uses `Show setups from grade` as a hide switch, changes `iKeep`, deletes records/tracker IDs, or recalculates a different setup. Local AST/parser/lint checks pass, and the user confirmed the fixed build compiles in TradingView (CW10026/CW10003/CE10117 resolved). Toggle-on/off rendering, object retention and matched replay are still to be verified in TradingView before treating visual behavior as chart-verified.
 
 ### Stage 2 — checklist clarity
 
