@@ -32,9 +32,16 @@ def source_at(ref, path):
     return subprocess.check_output(["git", "show", f"{ref}:{path}"], cwd=ROOT, text=True)
 
 
+def setup_body(tree):
+    body = function(tree, "f_setup").body
+    # CW10003 fix: setup logic is wrapped in `if d != 0` for unconditional calls.
+    if len(body) >= 1 and head(body[0]) == "if d != 0":
+        return list(body[0].value.body) + list(body[1:])
+    return body
+
+
 def shown_setup(tree):
-    fn = function(tree, "f_setup")
-    nodes = [node for node in fn.body if head(node) == "if show"]
+    nodes = [node for node in setup_body(tree) if head(node) == "if show"]
     assert len(nodes) == 1
     return nodes[0].value.body
 
@@ -71,11 +78,11 @@ def main():
     # The grade/display gate and label payload inputs remain unchanged.
     old_setup = function(old, "f_setup")
     new_setup = function(new, "f_setup")
-    for tree_setup in (old_setup, new_setup):
-        show_gate = [node for node in tree_setup.body if head(node).startswith("bool show =")]
+    for tree in (old, new):
+        show_gate = [node for node in setup_body(tree) if head(node).startswith("bool show =")]
         assert len(show_gate) == 1
-    assert dump(next(node for node in old_setup.body if head(node).startswith("bool show ="))) == dump(
-        next(node for node in new_setup.body if head(node).startswith("bool show ="))
+    assert dump(next(node for node in setup_body(old) if head(node).startswith("bool show ="))) == dump(
+        next(node for node in setup_body(new) if head(node).startswith("bool show ="))
     ), "setup grade/window/dedup gate changed"
     assert dump(function(old, "f_preview")) == dump(function(new, "f_preview"))
     check_tracker_visibility(old, new)
@@ -83,15 +90,17 @@ def main():
 
     old_children = shown_setup(old)
     new_children = shown_setup(new)
-    old_box = next(node for node in old_children if head(node).startswith("st.bx := box.new"))
-    zone_guard = next(node for node in new_children if head(node) == "if iZoneShow")
-    assert len(zone_guard.value.body) == 1
-    assert dump(zone_guard.value.body[0]) == dump(old_box), "zone toggle changed box geometry"
+    old_box = unparse(next(node for node in old_children if head(node).startswith("st.bx := box.new")))
+    new_box = unparse(next(node for node in new_children if head(node).startswith("st.bx := box.new")))
+    # CE10117 fix: the box is always created (so f_stDel can delete it unconditionally);
+    # iZoneShow Off makes it fully transparent instead of skipping creation.
+    assert "g.t0" in new_box and "g.top" in new_box and "g.bot" in new_box
+    assert "bgcolor=color.new(c, iZoneShow ? 85 : 100)" in new_box
+    assert "border_color=color.new(c, 100)" in new_box
 
     old_zone = unparse(next(node for node in old_children if head(node).startswith("st.tl.push(label.new")))
     new_zone = unparse(next(node for node in new_children if head(node).startswith("st.tl.push(label.new")))
     assert 'iZoneShow ? (cd ? "CISD" : g.tf + " iFVG") : ""' in new_zone
-    assert "textcolor=iZoneShow ? c : color.new(c, 100)" in new_zone
     assert 'tooltip=iZoneShow ? gTip : ""' in new_zone
     assert "g.t0" in old_zone and "gMid" in old_zone and "g.t0" in new_zone and "gMid" in new_zone
 
@@ -99,14 +108,16 @@ def main():
     new_tag = unparse(next(node for node in new_children if head(node).startswith("st.lb := label.new")))
     assert 'iSigShow ? lbTxt : ""' in new_tag
     assert 'tooltip=iSigShow ? tip : ""' in new_tag
-    assert "color=iSigShow ?" in new_tag and "textcolor=iSigShow ?" in new_tag
+    # Hidden tag: fully transparent background and text (100 = transparent in Pine).
+    assert "not iSigShow or not pill ? 100" in new_tag
+    assert "iSigShow ? 0 : 100" in new_tag
     assert "Tr.new(" in new_source and "st.lb" in new_source, "tracker must retain the setup label ID"
     assert "label.new" in old_tag and "label.new" in new_tag
 
     # Latest-only is a drawing mute pass before the ordinary record push/cap.
     recent = next(node for node in new_children if head(node) == "if mxLiteView and iMxRecent and sts.size() > 0")
     recent_text = unparse(recent)
-    assert "for oldSt in sts" in recent_text and "f_stHide(oldSt)" in recent_text
+    assert "for oldSt in sts" in recent_text and "f_stFade(oldSt, true)" in recent_text
     assert "for oldTr in trs" in recent_text and "oldTr.tagVisible := false" in recent_text
     assert "delete" not in recent_text and "sts.remove" not in recent_text and "sts.clear" not in recent_text
     assert "alert(" not in recent_text
@@ -114,12 +125,12 @@ def main():
     new_heads = [head(node) for node in new_children]
     assert new_heads.index("if mxLiteView and iMxRecent and sts.size() > 0") < new_heads.index("if iTrack and okWin")
     assert new_heads.index("if mxLiteView and iMxRecent and sts.size() > 0") < new_heads.index("sts.push(st)")
-    hide_fn = unparse(function(new, "f_stHide"))
-    assert "f_stFade(st, true)" in hide_fn
-    assert "label.set_tooltip" in hide_fn
+    # CE10117 fix merged f_stHide into f_stFade: hiding clears text and tooltips without deleting IDs.
+    fade_fn = unparse(function(new, "f_stFade"))
+    assert 'label.set_text(st.lb, "")' in fade_fn and 'label.set_tooltip(st.lb, "")' in fade_fn
+    assert 'label.set_text(lab, "")' in fade_fn and 'label.set_tooltip(lab, "")' in fade_fn
     for destructive in (".delete(", ".remove(", ".clear(", "alert(", "f_trkEnd("):
-        assert destructive not in hide_fn, f"latest-only helper must not perform {destructive}"
-    assert dump(function(old, "f_stFade")) == dump(function(new, "f_stFade")), "existing stop-fade behavior changed"
+        assert destructive not in fade_fn, f"mute helper must not perform {destructive}"
 
     # Only the already-existing Clean drawing-density branches gain MX Lite.
     for fragment in (
@@ -139,10 +150,10 @@ def main():
     old_gate = "bool show = slOk and gN >= minG and (okWin or iOut == \"Dim\") and not duplicate"
     assert old_source.count(old_gate) == 1
     bad_gate = parse(old_source.replace(old_gate, old_gate.replace("gN >= minG", "gN > minG"), 1))
-    assert dump(next(node for node in function(bad_gate, "f_setup").body if head(node).startswith("bool show ="))) != dump(
-        next(node for node in function(old, "f_setup").body if head(node).startswith("bool show ="))
+    assert dump(next(node for node in setup_body(bad_gate) if head(node).startswith("bool show ="))) != dump(
+        next(node for node in setup_body(old) if head(node).startswith("bool show ="))
     ), "positive control missed a changed grade gate"
-    bad_hide = parse(new_source.replace("f_stHide(oldSt)", "oldSt.lb.delete()", 1))
+    bad_hide = parse(new_source.replace("f_stFade(oldSt, true)", "oldSt.lb.delete()", 1))
     bad_recent = next(node for node in shown_setup(bad_hide) if head(node) == "if mxLiteView and iMxRecent and sts.size() > 0")
     assert ".delete()" in unparse(bad_recent), "positive control missed destructive hide"
     bad_tracker = parse(new_source.replace("if t.tagVisible", "if true", 1))

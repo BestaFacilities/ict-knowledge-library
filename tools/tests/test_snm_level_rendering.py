@@ -33,7 +33,10 @@ def head(node):
 
 def find_if(tree, header):
     nodes = [node for node in walk(tree) if isinstance(node, If) and head(node) == header]
-    assert len(nodes) == 1, (header, len(nodes))
+    assert len(nodes) >= 1, (header, len(nodes))
+    # CW10003 fix splits the engine into two `if barstate.isconfirmed and calc` blocks
+    # (main engine, then new chart gaps after the unconditional f_setup calls).
+    # The first block holds session registration; callers that need it use nodes[0].
     return nodes[0]
 
 

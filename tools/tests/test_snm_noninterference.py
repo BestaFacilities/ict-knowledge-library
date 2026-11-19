@@ -30,10 +30,19 @@ def head(node):
     return unparse(node).split("\n", 1)[0]
 
 
+def setup_body(tree):
+    body = function(tree, "f_setup").body
+    # 3.64 fix for CW10003 wraps the setup logic in `if d != 0` so the helper can be
+    # called unconditionally; d == 0 is a no-op. Unwrap for the logic comparison.
+    if len(body) >= 1 and head(body[0]) == "if d != 0":
+        return list(body[0].value.body) + list(body[1:])
+    return body
+
+
 def projection(tree):
     """Keep setup/grade/tracker/alert logic; omit display construction and mute metadata."""
     nodes = []
-    for node in function(tree, "f_setup").body:
+    for node in setup_body(tree):
         name = head(node)
         if name == "if iStageRow" or name.startswith("bool edOk ="):
             continue

@@ -174,10 +174,10 @@ string iTrade = input.string("Last setup", "Entry / stop / target lines", option
 int iDays = input.int(5, "History to calculate (days)", minval = 1, maxval = 60, group = G_D, tooltip = "SNM+ only runs its engine on the last N days before the last candle (in replay: before the replay candle). 5 days loads fast and is enough for every level and gap a session needs. raise it only if you want older setups drawn")
 int iKeep = input.int(3, "Setups kept on the chart", minval = 1, maxval = 30, group = G_D)
 string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"], group = G_D, tooltip = "Simple: D/T/E panel and plan + missing checks. Full: expanded panel and compact per-check/management tooltip. The verbose Full prose was condensed in 3.59 for TradingView's compiled-token limit; calculations, grades and alerts are unchanged.")
-string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean", "MX Lite"], group = G_D, tooltip = "Current retains 3.54 drawing density. Clean and MX Lite use compact auxiliary drawings. MX Lite defaults to the latest confirmed setup; setup tags and trigger zones have separate display switches. All views retain the same calculations, grades, targets, tracking and alerts.")
-bool iSigShow = input.bool(true, "Show setup labels", group = G_D, tooltip = "Display only: Off hides confirmed setup tags. Setup, grade, preview, outcome and alert logic continue; the tracker retains its label ID but does not repopulate a hidden tag.")
-bool iZoneShow = input.bool(true, "Show setup zones / iFVGs", group = G_D, tooltip = "Display only: Off hides the confirmed trigger box and iFVG/CISD marker. HTF FVG context, setup logic, grades, targets and alerts are unchanged.")
-bool iMxRecent = input.bool(true, "Latest setup only (MX Lite)", group = G_D, tooltip = "MX Lite only. Mutes older setup drawings without deleting retained records or tracker IDs. Outcomes/alerts continue; hidden objects remain until normal history pruning.")
+string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean", "MX Lite"], group = G_D, tooltip = "Current = 3.54 density. Clean/MX Lite = compact drawings. MX Lite defaults to latest setup only. Display only; logic unchanged.")
+bool iSigShow = input.bool(true, "Show setup labels", group = G_D, tooltip = "Display only. Off hides setup tags; logic, tracker and alerts continue.")
+bool iZoneShow = input.bool(true, "Show setup zones / iFVGs", group = G_D, tooltip = "Display only. Off hides trigger box/iFVG marker; logic unchanged.")
+bool iMxRecent = input.bool(true, "Latest setup only (MX Lite)", group = G_D, tooltip = "MX Lite only. Mutes older drawings; records/tracker kept.")
 bool cleanView = iView == "Clean"
 bool mxLiteView = iView == "MX Lite"
 bool compactView = cleanView or mxLiteView
@@ -194,7 +194,7 @@ int iZBack = input.int(120, "HTF gaps: box starts at most (candles back)", minva
 string iPSz = input.string("Small", "Panel text", options = ["Tiny", "Small", "Normal"], group = G_D)
 string iPal = input.string("Blue / Pink", "Signal colours", options = ["Blue / Pink", "Blue / Red", "Teal / Orange", "Green / Red", "Custom"], group = G_D, tooltip = "pick a pair that does NOT match your candle colours, so setups never blend into candles. Blue / Pink works with red / green / white / black candles. Custom uses the two colours below. colours too close to your background are corrected automatically")
 color iLongIn = input.color(#2962FF, "Custom long", inline = "c", group = G_D)
-color iShortIn = input.color(#F23645, "Custom short", inline = "c", group = G_D)
+color iShortIn = input.color(#F23645, "", inline = "c", group = G_D)
 
 // ───────── palette: follows the chart background and text colours; signal colours kept readable on it
 f_lum(color c) =>
@@ -886,6 +886,7 @@ f_stFade(St st, bool hide) =>
         label.set_textcolor(st.lb, color.new(cNeu, tr))
         if hide
             label.set_text(st.lb, "")
+            label.set_tooltip(st.lb, "")
     if not na(st.bx)
         box.set_bgcolor(st.bx, color.new(cNeu, hide ? 100 : 95))
         box.set_border_color(st.bx, color.new(cNeu, tr))
@@ -898,25 +899,13 @@ f_stFade(St st, bool hide) =>
             label.set_textcolor(lab, color.new(cNeu, tr))
             if hide
                 label.set_text(lab, "")
+                label.set_tooltip(lab, "")
     for lab in st.tc
         if not na(lab)
             label.set_color(lab, color.new(cNeu, 100))
             label.set_textcolor(lab, color.new(cNeu, tr))
             if hide
                 label.set_text(lab, "")
-    true
-
-// MX Lite recent-only display: mute older drawings without deleting IDs used by the tracker.
-f_stHide(St st) =>
-    f_stFade(st, true)
-    if not na(st.lb)
-        label.set_tooltip(st.lb, "")
-    for lab in st.tl
-        if not na(lab)
-            label.set_tooltip(lab, "")
-    if not na(st.tc)
-        for lab in st.tc
-            if not na(lab)
                 label.set_tooltip(lab, "")
     true
 
@@ -944,10 +933,8 @@ f_hcAdd(int d, float level, string tf, int confirmedT) =>
     true
 
 f_stDel(St st) =>
-    if not na(st.lb)
-        st.lb.delete()
-    if not na(st.bx)
-        st.bx.delete()
+    st.lb.delete()
+    st.bx.delete()
     for l in st.ln
         l.delete()
     for l in st.tl
@@ -1240,469 +1227,477 @@ f_isDuplicate(int d, float trigger, int sweepB, string model) =>
     dup
 
 f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
-    bool isL = d == 1
-    float buf = 2 * syminfo.mintick
-    int offX = math.min(bar_index - s.extB, 989)
-    float en = close
-    float slX = isL ? s.ext - buf : s.ext + buf
-    float slE = isL ? g.bot - buf : g.top + buf
-    float bodyE = isL ? math.min(open[offX], close[offX]) : math.max(open[offX], close[offX])
-    float slC = (s.ext + bodyE) / 2 + (isL ? -buf : buf)
-    float sl = slX
-    string slWhy = "sweep extreme"
-    if iStop == "iFVG edge"
-        sl := slE
-        slWhy := cd ? "CISD edge" : "iFVG edge"
-    else if iStop == "Wick CE"
-        sl := slC
-        slWhy := "wick CE"
-    if isL ? sl >= en : sl <= en
-        sl := slX
-        slWhy := "sweep extreme"
-    float risk = math.abs(en - sl)
-    bool slOk = risk > 0 and (isL ? sl < en : sl > en)
-    // base model from the structure; reversals split into RB (rebalance) and RV (reversal) by their draw
-    string mb = msSt == d ? "C" : msSt == -d ? "R" : "?"
-    string mdl = mb
-    // draw on liquidity, per model (HRL skipped unless "Flag only")
-    float tp = na
-    string tpN = ""
-    bool tpH = false
-    float tpFar = na
-    float edP = na
-    string edN = ""
-    float edRef = na
-    if slOk
-        float minP = isL ? en + iMinR * risk : en - iMinR * risk
-        [eP, eNm, eFr, eRf] = f_edge(isL, d)
-        edP := eP
-        edN := eNm
-        edRef := eRf
-        if mb == "R"
-            // rebalance: the 5m / 15m FVG left on the move; else the full reversal to the HTF DOL
-            [a1, b1, c1, d1] = f_draw(isL, d, minP, "ltf")
-            if not na(a1)
-                tp := a1
-                tpN := b1
-                tpH := c1
-                tpFar := d1
-                mdl := "RB"
+    if d != 0
+        bool isL = d == 1
+        float buf = 2 * syminfo.mintick
+        int offX = math.min(bar_index - s.extB, 989)
+        float en = close
+        float slX = isL ? s.ext - buf : s.ext + buf
+        float slE = isL ? g.bot - buf : g.top + buf
+        float bodyE = isL ? math.min(open[offX], close[offX]) : math.max(open[offX], close[offX])
+        float slC = (s.ext + bodyE) / 2 + (isL ? -buf : buf)
+        float sl = slX
+        string slWhy = "sweep extreme"
+        if iStop == "iFVG edge"
+            sl := slE
+            slWhy := cd ? "CISD edge" : "iFVG edge"
+        else if iStop == "Wick CE"
+            sl := slC
+            slWhy := "wick CE"
+        if isL ? sl >= en : sl <= en
+            sl := slX
+            slWhy := "sweep extreme"
+        float risk = math.abs(en - sl)
+        bool slOk = risk > 0 and (isL ? sl < en : sl > en)
+        // base model from the structure; reversals split into RB (rebalance) and RV (reversal) by their draw
+        string mb = msSt == d ? "C" : msSt == -d ? "R" : "?"
+        string mdl = mb
+        // draw on liquidity, per model (HRL skipped unless "Flag only")
+        float tp = na
+        string tpN = ""
+        bool tpH = false
+        float tpFar = na
+        float edP = na
+        string edN = ""
+        float edRef = na
+        if slOk
+            float minP = isL ? en + iMinR * risk : en - iMinR * risk
+            [eP, eNm, eFr, eRf] = f_edge(isL, d)
+            edP := eP
+            edN := eNm
+            edRef := eRf
+            if mb == "R"
+                // rebalance: the 5m / 15m FVG left on the move; else the full reversal to the HTF DOL
+                [a1, b1, c1, d1] = f_draw(isL, d, minP, "ltf")
+                if not na(a1)
+                    tp := a1
+                    tpN := b1
+                    tpH := c1
+                    tpFar := d1
+                    mdl := "RB"
+                else
+                    [a2, b2, c2, d2] = f_draw(isL, d, minP, "htf")
+                    tp := a2
+                    tpN := b2
+                    tpH := c2
+                    tpFar := d2
+                    mdl := "RV"
+            else if mb == "C" and not na(eP) and (isL ? eP >= minP : eP <= minP)
+                // continuation: the key level price is edging
+                tp := eP
+                tpN := eNm + " · edged"
+                tpFar := eFr
             else
-                [a2, b2, c2, d2] = f_draw(isL, d, minP, "htf")
-                tp := a2
-                tpN := b2
-                tpH := c2
-                tpFar := d2
-                mdl := "RV"
-        else if mb == "C" and not na(eP) and (isL ? eP >= minP : eP <= minP)
-            // continuation: the key level price is edging
-            tp := eP
-            tpN := eNm + " · edged"
-            tpFar := eFr
-        else
-            [a3, b3, c3, d3] = f_draw(isL, d, minP, "any")
-            tp := a3
-            tpN := b3
-            tpH := c3
-            tpFar := d3
-    bool dol = not na(tp)
-    // LRL: untaken failure swings between entry and the far edge of TP1 (staircase leading to it + taps at it)
-    int lrLk = math.max(10, int(iLrlLook * 60 / math.max(cs, 1)))
-    array<float> lrP = array.new<float>()
-    array<int> lrB = array.new<int>()
-    if dol
-        array<float> ap = isL ? lrHp : lrLp
-        array<int> ab = isL ? lrHb : lrLb
-        if ap.size() > 0
-            for i = 0 to ap.size() - 1
-                float pp = ap.get(i)
-                int pb = ab.get(i)
-                bool inZ = isL ? pp > en and pp <= math.max(tp, tpFar) : pp < en and pp >= math.min(tp, tpFar)
-                if inZ and pb < bar_index and bar_index - pb <= lrLk
-                    lrP.push(pp)
-                    lrB.push(pb)
-    int lrN = lrP.size()
-    // the nearest HRL between entry and the draw: protected, can block the move
-    float blkPx = na
-    string blkN = ""
-    if dol
-        for v in lvs
-            if v.hrl and v.hi == isL and (isL ? v.px > en and v.px < tp : v.px < en and v.px > tp)
-                if na(blkPx) or (isL ? v.px < blkPx : v.px > blkPx)
-                    blkPx := v.px
-                    blkN := v.nm
-    // management: BE at the nearest internal structure before TP1, TP2 = next draw beyond TP1 (runner)
-    float beP = na
-    string beN = ""
-    float tp2 = na
-    string tp2N = ""
-    if dol
-        for v in lvs
-            if v.hi == isL
-                if isL ? v.px > en and v.px < tp : v.px < en and v.px > tp
-                    if na(beP) or (isL ? v.px < beP : v.px > beP)
-                        beP := v.px
-                        beN := v.nm + (v.hrl ? " · HRL" : "")
-        [t2a, t2b, t2c, t2d] = f_draw(isL, d, isL ? tp + 0.5 * risk : tp - 0.5 * risk, "htf")
-        tp2 := t2a
-        tp2N := t2b
-    bool intTk = false
-    array<int> tsb = isL ? hiSwB : loSwB
-    if tsb.size() > 0
-        for bb in tsb
-            if bb > s.extB and bb <= bar_index
-                intTk := true
-    float r1 = dol and risk > 0 ? math.abs(tp - en) / risk : na
-    float p2R = isL ? en + 2 * risk : en - 2 * risk
-    // rulebook checks
-    bool vsh = bar_index - s.extB <= iVMax
-    float body = math.abs(close - open)
-    float rng = high - low
-    bool dispB = (isL ? close > open : close < open) and rng > 0 and body >= iDispAtr * atr and body / rng >= 0.55
-    // the close must also be clearly beyond the trigger level (FVG far edge or CISD level)
-    float trgL = isL ? g.top : g.bot
-    float clr = isL ? close - trgL : trgL - close
-    bool clrOk = clr >= math.max(iClrAtr * atr, 2 * syminfo.mintick)
-    bool disp = dispB and clrOk
-    bool htf = false
-    string htfN = ""
-    int htfRk = 0
-    for z in zs
-        if z.dir == d and z.tf != "5m" and not z.breached and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
-            int zr = f_zRank(z.tf)
-            htf := true
-            if zr > htfRk
-                htfRk := zr
-                htfN := z.tf + " FVG"
-    // a 5M gap counts as delivery only when sponsored by a 15m / 1H / 4H gap
-    if not htf
+                [a3, b3, c3, d3] = f_draw(isL, d, minP, "any")
+                tp := a3
+                tpN := b3
+                tpH := c3
+                tpFar := d3
+        bool dol = not na(tp)
+        // LRL: untaken failure swings between entry and the far edge of TP1 (staircase leading to it + taps at it)
+        int lrLk = math.max(10, int(iLrlLook * 60 / math.max(cs, 1)))
+        array<float> lrP = array.new<float>()
+        array<int> lrB = array.new<int>()
+        if dol
+            array<float> ap = isL ? lrHp : lrLp
+            array<int> ab = isL ? lrHb : lrLb
+            if ap.size() > 0
+                for i = 0 to ap.size() - 1
+                    float pp = ap.get(i)
+                    int pb = ab.get(i)
+                    bool inZ = isL ? pp > en and pp <= math.max(tp, tpFar) : pp < en and pp >= math.min(tp, tpFar)
+                    if inZ and pb < bar_index and bar_index - pb <= lrLk
+                        lrP.push(pp)
+                        lrB.push(pb)
+        int lrN = lrP.size()
+        // the nearest HRL between entry and the draw: protected, can block the move
+        float blkPx = na
+        string blkN = ""
+        if dol
+            for v in lvs
+                if v.hrl and v.hi == isL and (isL ? v.px > en and v.px < tp : v.px < en and v.px > tp)
+                    if na(blkPx) or (isL ? v.px < blkPx : v.px > blkPx)
+                        blkPx := v.px
+                        blkN := v.nm
+        // management: BE at the nearest internal structure before TP1, TP2 = next draw beyond TP1 (runner)
+        float beP = na
+        string beN = ""
+        float tp2 = na
+        string tp2N = ""
+        if dol
+            for v in lvs
+                if v.hi == isL
+                    if isL ? v.px > en and v.px < tp : v.px < en and v.px > tp
+                        if na(beP) or (isL ? v.px < beP : v.px > beP)
+                            beP := v.px
+                            beN := v.nm + (v.hrl ? " · HRL" : "")
+            [t2a, t2b, t2c, t2d] = f_draw(isL, d, isL ? tp + 0.5 * risk : tp - 0.5 * risk, "htf")
+            tp2 := t2a
+            tp2N := t2b
+        bool intTk = false
+        array<int> tsb = isL ? hiSwB : loSwB
+        if tsb.size() > 0
+            for bb in tsb
+                if bb > s.extB and bb <= bar_index
+                    intTk := true
+        float r1 = dol and risk > 0 ? math.abs(tp - en) / risk : na
+        float p2R = isL ? en + 2 * risk : en - 2 * risk
+        // rulebook checks
+        bool vsh = bar_index - s.extB <= iVMax
+        float body = math.abs(close - open)
+        float rng = high - low
+        bool dispB = (isL ? close > open : close < open) and rng > 0 and body >= iDispAtr * atr and body / rng >= 0.55
+        // the close must also be clearly beyond the trigger level (FVG far edge or CISD level)
+        float trgL = isL ? g.top : g.bot
+        float clr = isL ? close - trgL : trgL - close
+        bool clrOk = clr >= math.max(iClrAtr * atr, 2 * syminfo.mintick)
+        bool disp = dispB and clrOk
+        bool htf = false
+        string htfN = ""
+        int htfRk = 0
         for z in zs
-            if z.dir == d and z.tf == "5m" and (z.slot == 0 ? f_zSponsor(z) : z.sp) and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
+            if z.dir == d and z.tf != "5m" and not z.breached and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
+                int zr = f_zRank(z.tf)
                 htf := true
-                htfRk := 1
-                htfN := "5m FVG (sponsored by " + z.spN + ")"
-    // CISD: close beyond the open of the run that made the extreme
-    [cLvl, cOffX] = f_cisd(isL, offX)
-    bool cisd = cd or (not na(cLvl) and (isL ? close > cLvl : close < cLvl))
-    // volume divergence: price takes the level, the money flow does not follow
-    bool div = false
-    int oRef = bar_index - s.lvB
-    if s.lvB >= 0 and oRef > offX and oRef < 990
-        float m1 = mfi[oRef]
-        float m2 = mfi[offX]
-        div := not na(m1) and not na(m2) and (isL ? m2 > m1 : m2 < m1)
-    // SMT: the pair did not take its own matching level
-    bool smt = smtOn and not na(s.op) and not s.oTk and not na(s.pairX) and (isL ? s.pairX >= s.op : s.pairX <= s.op)
-    // TTrades Fractal Model: the last closed HTF candle (C2) confirms the swing
-    // C2 closure: swept the previous candle's low (high) and closed back inside · C3 closure: no sweep, closed beyond the body of the previous candle
-    bool c2Cl = clV == (isL ? 2 : -2)
-    bool c3Cl = clV == (isL ? 3 : -3)
-    bool ttOk = c2Cl or c3Cl
-    // the entry wick (sweep extreme) formed inside the T-Spot of the HTF candle
-    bool tsOk = tsDir == d and not na(tsTop) and s.ext <= tsTop + 0.25 * atr and s.ext >= tsBot - 0.25 * atr
-    string ttTx = c2Cl ? ttNm + " C2 closure · swept " + f_prc(isL ? c1l : c1h) + ", closed back inside at " + f_prc(c2c) : c3Cl ? ttNm + " C3 closure · closed " + (isL ? "above" : "below") + " the body of the previous candle at " + f_prc(c2c) : "no " + ttNm + " C2 / C3 closure yet: TTFM says the CISD means nothing without it"
-    // PSP: the same HTF candle closed a different colour on the pair
-    bool psp = smtOn and not na(pc2c) and not na(c2c) and (c2c > c2o) != (pc2c > pc2o)
-    bool smtP = smt or psp
-    // entry timing inside the current HTF candle (TTFM: enter early, near its open)
-    float ttEl = (time_close - htT0) / 60000.0
-    float ttLen = ttSec / 60.0
-    bool ttLate = ttEl > ttLen * 0.5
-    // time based exits: the next 15m / 30m / 1H closes
-    int nx15 = int(math.ceil(time_close / 900000.0)) * 900000
-    int nx30 = int(math.ceil(time_close / 1800000.0)) * 1800000
-    int nx60 = int(math.ceil(time_close / 3600000.0)) * 3600000
-    bool pre = str.contains(s.nm, "PRE")
-    // Judas: sweep and trigger inside the opening window, trigger candle big enough
-    bool jWin = inJudas and s.jx
-    float trig = high - low
-    bool jud = jWin and judasPts > 0 and trig >= judasPts
-    // a higher timeframe gap still open in the leg (read safely, pd can be na)
-    bool hiOk = na(pd)
-    string pdTxt = ""
-    string pdTf = ""
-    if not hiOk
-        pdTf := pd.tf
-        pdTxt := " · " + pd.tf + " gap still open " + f_prc(pd.bot) + " - " + f_prc(pd.top)
-    // reversals (RB / RV) only in NY AM (rulebook section 2), from 1H+ (or 15m if allowed)
-    bool isR = mb == "R"
-    bool rBad = isR and not inAm
-    int lrNeed = isR ? 3 : 2
-    bool delOk = isR ? htfRk >= (iRvDel == "15m allowed (more setups)" ? 2 : 3) : htf
-    bool lrOk = lrN >= lrNeed
-    bool bOk = iBias == "Neutral" or (iBias == "Bullish") == isL
-    bool scBad = cd and not inAm
-    int miss = (delOk ? 0 : 1) + (vsh or cd ? 0 : 1) + (disp ? 0 : 1) + (dol ? 0 : 1)
-    int gN = miss == 0 ? 2 : miss == 1 ? 1 : 0
-    if gN == 2 and pre and inMacro and isR
-        gN := 3
-    // internal sweep: counts only when it happens inside an HTF FVG (continuation stop-hunt 6.1, or a reversal off the HTF PD array)
-    bool intSw = not s.key and htf
-    if not s.key and not intSw
-        gN := 0
-    if not bOk
-        gN := 0
-    // rulebook blocks: reversal or Sweep + CISD outside NY AM = not allowed
-    bool hardB = iHard and (rBad or scBad)
-    if hardB
-        gN := 0
-    // a reversal needs SMT
-    if iSmtR and isR and smtOn and not smt and gN > 0
-        gN := gN == 3 ? 1 : gN - 1
-    // TTFM filter: no HTF C2 / C3 closure in this direction
-    if iTtF != "Off" and not ttOk and gN > 0
-        gN := iTtF == "Strict" ? 0 : gN == 3 ? 1 : gN - 1
-    bool hcOk = false
-    string hcWhich = ""
-    if iHCOn
-        for ev in hcEvents
-            if ev.d == d and ev.confirmedT <= time_close and time_close - ev.confirmedT <= iHCFresh * 60000
-                hcOk := true
-                hcWhich := f_zName(ev.tf) + " CISD" + (d == 1 ? "+" : "-") + " " + f_prc(ev.level)
-    int conf = (ttOk ? 1 : 0) + (cisd ? 1 : 0) + (div ? 1 : 0) + (smtP ? 1 : 0)
-    float triggerPx = isL ? g.top : g.bot
-    bool duplicate = f_isDuplicate(d, triggerPx, s.b0, mdl)
-    if duplicate
-        dedupBars.push(bar_index)
-        if dedupBars.size() > 30
-            dedupBars.shift()
-    bool show = slOk and gN >= minG and (okWin or iOut == "Dim") and not duplicate
-    // Store only the most recent evaluated trigger on this bar; never alter the setup/alert gates.
-    if iStageRow
-        string why = not slOk ? "STOP" : not (s.key or intSw) ? "SWEEP" : not bOk ? "BIAS" : hardB ? "NY RULEBOOK" : not delOk ? "NO HTF" : not (vsh or cd) ? "V-SHAPE" : not disp ? "DISPLACEMENT" : not dol ? "NO TARGET" : iTtF != "Off" and not ttOk ? "TTFM" : iSmtR and isR and smtOn and not smt ? "SMT" : duplicate ? "DUPLICATE" : not okWin ? (inNews ? "NEWS" : "WINDOW") : "BELOW " + iMinG
-        bool eligible = show and okWin and (not hardB or iAlBlockedB) and iAlConfirmed and f_alertAllowed()
-        string noAlert = not okWin ? (inNews ? "NEWS" : "WINDOW") : hardB and not iAlBlockedB ? "RULEBOOK B" : not iAlOn ? "ALERTS OFF" : not iAlConfirmed ? "CONFIRMED OFF" : "ALERT WINDOW"
-        ui.stageB := bar_index
-        ui.stageMsg := (isL ? "L " : "S ") + (cd ? "CISD" : g.tf + " iFVG") + " · " + (show ? "CONF " + f_gT(gN) + (eligible ? (hardB ? " · STUDY ELIGIBLE" : " · ELIGIBLE") : " · NO ALERT " + noAlert) : "BLOCK " + why)
-    if iDiag and not cd and (not show or gN == 0)
-        string why = g.tf + " " + f_gT(gN)
-        why += not slOk ? " STOP" : ""
-        why += not (s.key or intSw) ? " SWEEP" : ""
-        why += not delOk ? " NO-HTF" : ""
-        why += not disp ? " DISP" : ""
-        why += not dol ? " NO-TP" : ""
-        why += not vsh ? " V-SHAPE" : ""
-        why += not bOk ? " BIAS" : ""
-        why += hardB ? " NY-BLOCK" : ""
-        why += iTtF != "Off" and not ttOk ? " TTFM" : ""
-        why += isR and iSmtR and smtOn and not smt ? " SMT" : ""
-        why += duplicate ? " DUP" : ""
-        why += not okWin ? " WINDOW" : ""
-        why += gN < minG ? " BELOW-" + iMinG : ""
-        why += show and gN == 0 ? " B-ONLY" : ""
-        f_dbgAdd(d, triggerPx, why)
-    if show
-        sigKeys.push(SigKey.new(d, triggerPx, s.b0, bar_index, mdl))
-        while sigKeys.size() > 30
-            sigKeys.shift()
-        float riskUsd = gN >= 2 ? iRiskP : iRiskA
-        int n = syminfo.pointvalue > 0 ? int(math.floor(riskUsd / (risk * syminfo.pointvalue))) : 0
-        bool wide = maxStop > 0 and risk > maxStop
-        string gT = f_gT(gN)
-        // simple tooltip: plan + only what is missing
-        string miss2 = ""
-        if not (s.key or intSw)
-            miss2 += "\n✖ internal sweep outside any HTF FVG"
-        if not delOk
-            miss2 += "\n✖ HTF delivery" + (htf ? " (" + htfN + ", a reversal needs " + (iRvDel == "15m allowed (more setups)" ? "15m+" : "1H+") + ")" : "")
-        if not dol
-            miss2 += "\n✖ no draw at " + str.tostring(iMinR) + "R or more"
-        if dol and not lrOk
-            miss2 += "\n✖ LRL " + str.tostring(lrN) + " / " + str.tostring(lrNeed)
-        if tpH
-            miss2 += "\n✖ the draw is HRL (protected)"
-        if not vsh and not cd
-            miss2 += "\n✖ V-shape (" + str.tostring(bar_index - s.extB) + " candles)"
-        if not disp
-            miss2 += "\n✖ displacement" + (clrOk ? " (weak body)" : " (close only " + str.tostring(clr, "#.##") + " pts beyond the trigger)")
-        if not cd and not jud and not hiOk
-            miss2 += "\n✖ highest TF iFVG (" + pdTf + " gap still open)"
-        if intTk
-            miss2 += "\n✖ internal liquidity already swept"
-        if not ttOk
-            miss2 += "\n✖ no " + ttNm + " C2 / C3 closure"
-        if not tsOk and ttOk
-            miss2 += "\n✖ wick outside the " + ttNm + " T-Spot"
-        if ttLate
-            miss2 += "\n✖ late in the " + ttNm + " candle (" + str.tostring(ttEl, "#") + " / " + str.tostring(ttLen, "#") + " min)"
-        if isR and smtOn and not smt
-            miss2 += "\n✖ reversal without SMT"
-        if rBad or scBad
-            miss2 += "\n✖ not allowed outside NY AM"
+                if zr > htfRk
+                    htfRk := zr
+                    htfN := z.tf + " FVG"
+        // a 5M gap counts as delivery only when sponsored by a 15m / 1H / 4H gap
+        if not htf
+            for z in zs
+                if z.dir == d and z.tf == "5m" and (z.slot == 0 ? f_zSponsor(z) : z.sp) and s.ext <= z.top + 0.25 * atr and s.ext >= z.bot - 0.25 * atr
+                    htf := true
+                    htfRk := 1
+                    htfN := "5m FVG (sponsored by " + z.spN + ")"
+        // CISD: close beyond the open of the run that made the extreme
+        [cLvl, cOffX] = f_cisd(isL, offX)
+        bool cisd = cd or (not na(cLvl) and (isL ? close > cLvl : close < cLvl))
+        // volume divergence: price takes the level, the money flow does not follow
+        bool div = false
+        int oRef = bar_index - s.lvB
+        if s.lvB >= 0 and oRef > offX and oRef < 990
+            float m1 = mfi[oRef]
+            float m2 = mfi[offX]
+            div := not na(m1) and not na(m2) and (isL ? m2 > m1 : m2 < m1)
+        // SMT: the pair did not take its own matching level
+        bool smt = smtOn and not na(s.op) and not s.oTk and not na(s.pairX) and (isL ? s.pairX >= s.op : s.pairX <= s.op)
+        // TTrades Fractal Model: the last closed HTF candle (C2) confirms the swing
+        // C2 closure: swept the previous candle's low (high) and closed back inside · C3 closure: no sweep, closed beyond the body of the previous candle
+        bool c2Cl = clV == (isL ? 2 : -2)
+        bool c3Cl = clV == (isL ? 3 : -3)
+        bool ttOk = c2Cl or c3Cl
+        // the entry wick (sweep extreme) formed inside the T-Spot of the HTF candle
+        bool tsOk = tsDir == d and not na(tsTop) and s.ext <= tsTop + 0.25 * atr and s.ext >= tsBot - 0.25 * atr
+        string ttTx = c2Cl ? ttNm + " C2 closure · swept " + f_prc(isL ? c1l : c1h) + ", closed back inside at " + f_prc(c2c) : c3Cl ? ttNm + " C3 closure · closed " + (isL ? "above" : "below") + " the body of the previous candle at " + f_prc(c2c) : "no " + ttNm + " C2 / C3 closure yet: TTFM says the CISD means nothing without it"
+        // PSP: the same HTF candle closed a different colour on the pair
+        bool psp = smtOn and not na(pc2c) and not na(c2c) and (c2c > c2o) != (pc2c > pc2o)
+        bool smtP = smt or psp
+        // entry timing inside the current HTF candle (TTFM: enter early, near its open)
+        float ttEl = (time_close - htT0) / 60000.0
+        float ttLen = ttSec / 60.0
+        bool ttLate = ttEl > ttLen * 0.5
+        // time based exits: the next 15m / 30m / 1H closes
+        int nx15 = int(math.ceil(time_close / 900000.0)) * 900000
+        int nx30 = int(math.ceil(time_close / 1800000.0)) * 1800000
+        int nx60 = int(math.ceil(time_close / 3600000.0)) * 3600000
+        bool pre = str.contains(s.nm, "PRE")
+        // Judas: sweep and trigger inside the opening window, trigger candle big enough
+        bool jWin = inJudas and s.jx
+        float trig = high - low
+        bool jud = jWin and judasPts > 0 and trig >= judasPts
+        // a higher timeframe gap still open in the leg (read safely, pd can be na)
+        bool hiOk = na(pd)
+        string pdTxt = ""
+        string pdTf = ""
+        if not hiOk
+            pdTf := pd.tf
+            pdTxt := " · " + pd.tf + " gap still open " + f_prc(pd.bot) + " - " + f_prc(pd.top)
+        // reversals (RB / RV) only in NY AM (rulebook section 2), from 1H+ (or 15m if allowed)
+        bool isR = mb == "R"
+        bool rBad = isR and not inAm
+        int lrNeed = isR ? 3 : 2
+        bool delOk = isR ? htfRk >= (iRvDel == "15m allowed (more setups)" ? 2 : 3) : htf
+        bool lrOk = lrN >= lrNeed
+        bool bOk = iBias == "Neutral" or (iBias == "Bullish") == isL
+        bool scBad = cd and not inAm
+        int miss = (delOk ? 0 : 1) + (vsh or cd ? 0 : 1) + (disp ? 0 : 1) + (dol ? 0 : 1)
+        int gN = miss == 0 ? 2 : miss == 1 ? 1 : 0
+        if gN == 2 and pre and inMacro and isR
+            gN := 3
+        // internal sweep: counts only when it happens inside an HTF FVG (continuation stop-hunt 6.1, or a reversal off the HTF PD array)
+        bool intSw = not s.key and htf
+        if not s.key and not intSw
+            gN := 0
         if not bOk
-            miss2 += "\n✖ against your bias"
-        if wide
-            miss2 += "\n✖ stop wider than " + str.tostring(maxStop) + " pts"
-        if not na(blkPx)
-            miss2 += "\n⚠ HRL in the way at " + f_prc(blkPx) + " (" + str.tostring(math.abs(blkPx - en) / risk, "#.#") + "R): BE / partial there"
-        string tipS = (hardB ? "NOT ALLOWED · " : "") + (isL ? "LONG " : "SHORT ") + gT + " · " + mdl + (cd ? " · CISD" : " · iFVG " + g.tf) + (jud ? " · Judas" : "") + " · confluence " + str.tostring(conf) + "/4" + (okWin ? "" : inNews ? " · NEWS" : " · outside windows")
-        tipS += "\n\nentry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#.##") + " pts) · size " + str.tostring(n) + " (" + syminfo.ticker + ") at $" + str.tostring(riskUsd) + " budget"
-        tipS += dol ? "\nTP1 " + f_prc(tp) + " · " + tpN + " · " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "\nno TP1 draw"
-        tipS += (na(beP) ? "" : "\nBE at " + f_prc(beP)) + (na(tp2) ? "" : "\nTP2 " + f_prc(tp2) + " (" + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R)")
-        if n == 0
-            miss2 += "\n✖ SIZE 0 · check risk budget and chart point value; not a tradable size"
-        tipS += miss2 == "" ? "\n\n✔ every check passed" : "\n" + miss2
+            gN := 0
+        // rulebook blocks: reversal or Sweep + CISD outside NY AM = not allowed
+        bool hardB = iHard and (rBad or scBad)
+        if hardB
+            gN := 0
+        // a reversal needs SMT
+        if iSmtR and isR and smtOn and not smt and gN > 0
+            gN := gN == 3 ? 1 : gN - 1
+        // TTFM filter: no HTF C2 / C3 closure in this direction
+        if iTtF != "Off" and not ttOk and gN > 0
+            gN := iTtF == "Strict" ? 0 : gN == 3 ? 1 : gN - 1
+        bool hcOk = false
+        string hcWhich = ""
         if iHCOn
-            tipS += "\nHTF CISD: " + (hcOk ? hcWhich : "none fresh") + " (info only)"
-        tipS += "\n\nswept: " + s.dt
-        // Full keeps a compact checklist and plan instead of compiling a second,
-        // mostly duplicated long-form explanation for every setup path.
-        string tip = tipS
-        if iDet == "Full"
-            tip += "\n\nCHECKS"
-            tip += "\n" + f_ck(s.key or intSw) + "sweep " + s.dt
-            tip += "\n" + f_ck(hiOk or cd or jud) + "highest iFVG" + pdTxt
-            tip += "\n" + f_ck(vsh or cd) + "V-shape " + str.tostring(bar_index - s.extB) + " bars"
-            tip += "\n" + f_ck(disp) + "displacement · " + str.tostring(body, "#.##") + " pts body, " + str.tostring(clr, "#.##") + " pts clear"
-            tip += "\n" + f_ck(delOk) + "HTF delivery" + (htf ? " · " + htfN : "")
-            tip += "\n" + f_ck(dol) + "target" + (dol ? " · " + tpN : "")
-            tip += "\n" + f_ck(lrOk) + "LRL " + str.tostring(lrN) + "/" + str.tostring(lrNeed)
-            tip += "\n" + f_ck(not intTk) + "internal liq. untouched"
-            tip += "\n" + f_ck(ttOk) + ttTx
-            tip += "\n" + f_ck(tsOk) + "T-Spot " + (tsOk ? f_prc(tsBot) + "–" + f_prc(tsTop) : "missing/outside")
-            tip += "\n" + f_ck(cisd) + "CISD" + (na(cLvl) ? "" : " " + f_prc(cLvl))
-            tip += "\n" + f_ck(div) + "volume divergence"
-            tip += "\n" + f_ck(smtP) + "SMT/PSP" + (smtOn ? " " + pairRoot : " (off)")
-            if smtOn and iEsChk
-                [esOk, esN] = f_esDel(d, s.pairX)
-                int fs = cd ? 2 : f_fsmt(g.bull, g.b, g.tf)
-                tip += "\n" + f_ck(esOk) + pairRoot + " delivery" + (esOk ? " " + esN : "")
-                tip += fs == 2 ? "" : "\n" + f_ck(fs == 1) + "pair printed gap"
+            for ev in hcEvents
+                if ev.d == d and ev.confirmedT <= time_close and time_close - ev.confirmedT <= iHCFresh * 60000
+                    hcOk := true
+                    hcWhich := f_zName(ev.tf) + " CISD" + (d == 1 ? "+" : "-") + " " + f_prc(ev.level)
+        int conf = (ttOk ? 1 : 0) + (cisd ? 1 : 0) + (div ? 1 : 0) + (smtP ? 1 : 0)
+        float triggerPx = isL ? g.top : g.bot
+        bool duplicate = f_isDuplicate(d, triggerPx, s.b0, mdl)
+        if duplicate
+            dedupBars.push(bar_index)
+            if dedupBars.size() > 30
+                dedupBars.shift()
+        bool show = slOk and gN >= minG and (okWin or iOut == "Dim") and not duplicate
+        // Store only the most recent evaluated trigger on this bar; never alter the setup/alert gates.
+        if iStageRow
+            string why = not slOk ? "STOP" : not (s.key or intSw) ? "SWEEP" : not bOk ? "BIAS" : hardB ? "NY RULEBOOK" : not delOk ? "NO HTF" : not (vsh or cd) ? "V-SHAPE" : not disp ? "DISPLACEMENT" : not dol ? "NO TARGET" : iTtF != "Off" and not ttOk ? "TTFM" : iSmtR and isR and smtOn and not smt ? "SMT" : duplicate ? "DUPLICATE" : not okWin ? (inNews ? "NEWS" : "WINDOW") : "BELOW " + iMinG
+            bool eligible = show and okWin and (not hardB or iAlBlockedB) and iAlConfirmed and f_alertAllowed()
+            string noAlert = not okWin ? (inNews ? "NEWS" : "WINDOW") : hardB and not iAlBlockedB ? "RULEBOOK B" : not iAlOn ? "ALERTS OFF" : not iAlConfirmed ? "CONFIRMED OFF" : "ALERT WINDOW"
+            ui.stageB := bar_index
+            ui.stageMsg := (isL ? "L " : "S ") + (cd ? "CISD" : g.tf + " iFVG") + " · " + (show ? "CONF " + f_gT(gN) + (eligible ? (hardB ? " · STUDY ELIGIBLE" : " · ELIGIBLE") : " · NO ALERT " + noAlert) : "BLOCK " + why)
+        if iDiag and not cd and (not show or gN == 0)
+            string why = g.tf + " " + f_gT(gN)
+            why += not slOk ? " STOP" : ""
+            why += not (s.key or intSw) ? " SWEEP" : ""
+            why += not delOk ? " NO-HTF" : ""
+            why += not disp ? " DISP" : ""
+            why += not dol ? " NO-TP" : ""
+            why += not vsh ? " V-SHAPE" : ""
+            why += not bOk ? " BIAS" : ""
+            why += hardB ? " NY-BLOCK" : ""
+            why += iTtF != "Off" and not ttOk ? " TTFM" : ""
+            why += isR and iSmtR and smtOn and not smt ? " SMT" : ""
+            why += duplicate ? " DUP" : ""
+            why += not okWin ? " WINDOW" : ""
+            why += gN < minG ? " BELOW-" + iMinG : ""
+            why += show and gN == 0 ? " B-ONLY" : ""
+            f_dbgAdd(d, triggerPx, why)
+        if show
+            sigKeys.push(SigKey.new(d, triggerPx, s.b0, bar_index, mdl))
+            while sigKeys.size() > 30
+                sigKeys.shift()
+            float riskUsd = gN >= 2 ? iRiskP : iRiskA
+            int n = syminfo.pointvalue > 0 ? int(math.floor(riskUsd / (risk * syminfo.pointvalue))) : 0
+            bool wide = maxStop > 0 and risk > maxStop
+            string gT = f_gT(gN)
+            // simple tooltip: plan + only what is missing
+            string miss2 = ""
+            if not (s.key or intSw)
+                miss2 += "\n✖ internal sweep outside any HTF FVG"
+            if not delOk
+                miss2 += "\n✖ HTF delivery" + (htf ? " (" + htfN + ", a reversal needs " + (iRvDel == "15m allowed (more setups)" ? "15m+" : "1H+") + ")" : "")
+            if not dol
+                miss2 += "\n✖ no draw at " + str.tostring(iMinR) + "R or more"
+            if dol and not lrOk
+                miss2 += "\n✖ LRL " + str.tostring(lrN) + " / " + str.tostring(lrNeed)
+            if tpH
+                miss2 += "\n✖ the draw is HRL (protected)"
+            if not vsh and not cd
+                miss2 += "\n✖ V-shape (" + str.tostring(bar_index - s.extB) + " candles)"
+            if not disp
+                miss2 += "\n✖ displacement" + (clrOk ? " (weak body)" : " (close only " + str.tostring(clr, "#.##") + " pts beyond the trigger)")
+            if not cd and not jud and not hiOk
+                miss2 += "\n✖ highest TF iFVG (" + pdTf + " gap still open)"
+            if intTk
+                miss2 += "\n✖ internal liquidity already swept"
+            if not ttOk
+                miss2 += "\n✖ no " + ttNm + " C2 / C3 closure"
+            if not tsOk and ttOk
+                miss2 += "\n✖ wick outside the " + ttNm + " T-Spot"
+            if ttLate
+                miss2 += "\n✖ late in the " + ttNm + " candle (" + str.tostring(ttEl, "#") + " / " + str.tostring(ttLen, "#") + " min)"
+            if isR and smtOn and not smt
+                miss2 += "\n✖ reversal without SMT"
+            if rBad or scBad
+                miss2 += "\n✖ not allowed outside NY AM"
+            if not bOk
+                miss2 += "\n✖ against your bias"
+            if wide
+                miss2 += "\n✖ stop wider than " + str.tostring(maxStop) + " pts"
+            if not na(blkPx)
+                miss2 += "\n⚠ HRL in the way at " + f_prc(blkPx) + " (" + str.tostring(math.abs(blkPx - en) / risk, "#.#") + "R): BE / partial there"
+            string tipS = (hardB ? "NOT ALLOWED · " : "") + (isL ? "LONG " : "SHORT ") + gT + " · " + mdl + (cd ? " · CISD" : " · iFVG " + g.tf) + (jud ? " · Judas" : "") + " · confluence " + str.tostring(conf) + "/4" + (okWin ? "" : inNews ? " · NEWS" : " · outside windows")
+            tipS += "\n\nentry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#.##") + " pts) · size " + str.tostring(n) + " (" + syminfo.ticker + ") at $" + str.tostring(riskUsd) + " budget"
+            tipS += dol ? "\nTP1 " + f_prc(tp) + " · " + tpN + " · " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "\nno TP1 draw"
+            tipS += (na(beP) ? "" : "\nBE at " + f_prc(beP)) + (na(tp2) ? "" : "\nTP2 " + f_prc(tp2) + " (" + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R)")
+            if n == 0
+                miss2 += "\n✖ SIZE 0 · check risk budget and chart point value; not a tradable size"
+            tipS += miss2 == "" ? "\n\n✔ every check passed" : "\n" + miss2
             if iHCOn
-                tip += "\nHTF CISD " + (hcOk ? hcWhich : "none fresh") + " (info only)"
-            tip += "\n" + f_ck(bOk) + "bias" + (pre ? " · PRE" : "") + (inMacro ? " · macro" : "")
-            tip += "\nstop " + slWhy + " · BE " + (na(beP) ? "none" : beN + " " + f_prc(beP))
-            tip += "\npartial " + (dol ? (r1 >= 1.5 ? "half TP1" : "half 2R " + f_prc(p2R)) : "no target")
-            tip += "\nexits 15m " + str.format_time(nx15, "HH:mm", NY) + " · 30m " + str.format_time(nx30, "HH:mm", NY) + " · 1H " + str.format_time(nx60, "HH:mm", NY)
-            tip += "\n" + str.tostring(n) + " contracts" + (wide ? " · WIDE STOP" : "")
+                tipS += "\nHTF CISD: " + (hcOk ? hcWhich : "none fresh") + " (info only)"
+            tipS += "\n\nswept: " + s.dt
+            // Full keeps a compact checklist and plan instead of compiling a second,
+            // mostly duplicated long-form explanation for every setup path.
+            string tip = tipS
+            if iDet == "Full"
+                tip += "\n\nCHECKS"
+                tip += "\n" + f_ck(s.key or intSw) + "sweep " + s.dt
+                tip += "\n" + f_ck(hiOk or cd or jud) + "highest iFVG" + pdTxt
+                tip += "\n" + f_ck(vsh or cd) + "V-shape " + str.tostring(bar_index - s.extB) + " bars"
+                tip += "\n" + f_ck(disp) + "displacement · " + str.tostring(body, "#.##") + " pts body, " + str.tostring(clr, "#.##") + " pts clear"
+                tip += "\n" + f_ck(delOk) + "HTF delivery" + (htf ? " · " + htfN : "")
+                tip += "\n" + f_ck(dol) + "target" + (dol ? " · " + tpN : "")
+                tip += "\n" + f_ck(lrOk) + "LRL " + str.tostring(lrN) + "/" + str.tostring(lrNeed)
+                tip += "\n" + f_ck(not intTk) + "internal liq. untouched"
+                tip += "\n" + f_ck(ttOk) + ttTx
+                tip += "\n" + f_ck(tsOk) + "T-Spot " + (tsOk ? f_prc(tsBot) + "–" + f_prc(tsTop) : "missing/outside")
+                tip += "\n" + f_ck(cisd) + "CISD" + (na(cLvl) ? "" : " " + f_prc(cLvl))
+                tip += "\n" + f_ck(div) + "volume divergence"
+                tip += "\n" + f_ck(smtP) + "SMT/PSP" + (smtOn ? " " + pairRoot : " (off)")
+                if smtOn and iEsChk
+                    [esOk, esN] = f_esDel(d, s.pairX)
+                    int fs = cd ? 2 : f_fsmt(g.bull, g.b, g.tf)
+                    tip += "\n" + f_ck(esOk) + pairRoot + " delivery" + (esOk ? " " + esN : "")
+                    tip += fs == 2 ? "" : "\n" + f_ck(fs == 1) + "pair printed gap"
+                if iHCOn
+                    tip += "\nHTF CISD " + (hcOk ? hcWhich : "none fresh") + " (info only)"
+                tip += "\n" + f_ck(bOk) + "bias" + (pre ? " · PRE" : "") + (inMacro ? " · macro" : "")
+                tip += "\nstop " + slWhy + " · BE " + (na(beP) ? "none" : beN + " " + f_prc(beP))
+                tip += "\npartial " + (dol ? (r1 >= 1.5 ? "half TP1" : "half 2R " + f_prc(p2R)) : "no target")
+                tip += "\nexits 15m " + str.format_time(nx15, "HH:mm", NY) + " · 30m " + str.format_time(nx30, "HH:mm", NY) + " · 1H " + str.format_time(nx60, "HH:mm", NY)
+                tip += "\n" + str.tostring(n) + " contracts" + (wide ? " · WIDE STOP" : "")
 
-        color c = not okWin ? color.gray : isL ? iLong : iShort
-        St st = St.new(ln = array.new<line>(), tl = array.new<label>(), tc = array.new<label>())
-        st.stopPx := sl
-        st.dir := d
-        st.madeB := bar_index
-        if iZoneShow
-            st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, 85))
-        // iFVG tag with hover info
-        int gOff = math.min(bar_index - g.b, 989)
-        float gMid = (g.top + g.bot) / 2
-        string gTip = cd ? "CISD · " + (isL ? "close above the open of the bearish run → long" : "close below the open of the bullish run → short") : g.tf + " iFVG · " + (g.bull ? "bullish gap inversed → short" : "bearish gap inversed → long")
-        if cd
-            gTip += "\n\nCISD level " + f_prc(isL ? g.top : g.bot) + " · run started " + str.format_time(time[gOff], "HH:mm", NY) + " · closed through " + str.format_time(time, "HH:mm", NY)
-        else
-            gTip += "\n\nrange " + f_prc(g.bot) + " - " + f_prc(g.top) + " · " + str.tostring(g.top - g.bot, "#.##") + " pts"
-            gTip += "\nCE (50%) " + f_prc(gMid)
-            gTip += "\ngap confirmed " + str.format_time(time[gOff], "HH:mm", NY) + " · inversed " + str.format_time(time, "HH:mm", NY)
-        gTip += "\n" + str.tostring(bar_index - s.extB) + " candles from the extreme (V-shape max " + str.tostring(iVMax) + ")"
-        gTip += "\ntrigger body " + str.tostring(body, "#.##") + " pts · " + (disp ? "displacement ✔" : "no displacement ✖")
-        gTip += cd ? "" : jud ? "\n\nhighest TF not required (Judas)" : "\n\n" + f_ck(hiOk) + "highest TF iFVG in the leg" + pdTxt
-        st.tl.push(label.new(g.t0, gMid, iZoneShow ? (cd ? "CISD" : g.tf + " iFVG") : "", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(c, 100), textcolor = iZoneShow ? c : color.new(c, 100), size = size.tiny, tooltip = iZoneShow ? gTip : "", text_font_family = font.family_monospace))
-        string lbTxt = (isL ? "▲ " : "▼ ") + gT + " " + str.tostring(conf) + "/4 " + mdl + (rBad or scBad ? "✖" : "") + (cd ? " CISD" : "") + (jud ? " J" : "") + (inNews ? " NEWS" : "")
-        bool pill = iLbl == "Pills"
-        st.lb := label.new(bar_index, isL ? low : high, iSigShow ? lbTxt : "", xloc = xloc.bar_index, yloc = isL ? yloc.belowbar : yloc.abovebar, style = pill ? (isL ? label.style_label_up : label.style_label_down) : label.style_none, color = iSigShow ? (pill ? color.new(c, gN >= 2 ? 0 : 35) : color.new(c, 100)) : color.new(c, 100), textcolor = iSigShow ? (pill ? f_on(c) : c) : color.new(c, 100), size = f_sz(), tooltip = iSigShow ? tip : "", text_font_family = font.family_monospace)
-        // older setup: keep label and iFVG box, drop its trade lines
-        if iTrade == "Last setup" and sts.size() > 0
-            St prv = sts.last()
-            for l in prv.ln
-                l.delete()
-            prv.ln.clear()
-            while prv.tl.size() > 1
-                prv.tl.pop().delete()
-            if not na(prv.tc)
-                for l in prv.tc
+            color c = not okWin ? color.gray : isL ? iLong : iShort
+            St st = St.new(ln = array.new<line>(), tl = array.new<label>(), tc = array.new<label>())
+            st.stopPx := sl
+            st.dir := d
+            st.madeB := bar_index
+            st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, iZoneShow ? 85 : 100))
+            // iFVG tag with hover info
+            int gOff = math.min(bar_index - g.b, 989)
+            float gMid = (g.top + g.bot) / 2
+            string gTip = cd ? "CISD · " + (isL ? "close above the open of the bearish run → long" : "close below the open of the bullish run → short") : g.tf + " iFVG · " + (g.bull ? "bullish gap inversed → short" : "bearish gap inversed → long")
+            if cd
+                gTip += "\n\nCISD level " + f_prc(isL ? g.top : g.bot) + " · run started " + str.format_time(time[gOff], "HH:mm", NY) + " · closed through " + str.format_time(time, "HH:mm", NY)
+            else
+                gTip += "\n\nrange " + f_prc(g.bot) + " - " + f_prc(g.top) + " · " + str.tostring(g.top - g.bot, "#.##") + " pts"
+                gTip += "\nCE (50%) " + f_prc(gMid)
+                gTip += "\ngap confirmed " + str.format_time(time[gOff], "HH:mm", NY) + " · inversed " + str.format_time(time, "HH:mm", NY)
+            gTip += "\n" + str.tostring(bar_index - s.extB) + " candles from the extreme (V-shape max " + str.tostring(iVMax) + ")"
+            gTip += "\ntrigger body " + str.tostring(body, "#.##") + " pts · " + (disp ? "displacement ✔" : "no displacement ✖")
+            gTip += cd ? "" : jud ? "\n\nhighest TF not required (Judas)" : "\n\n" + f_ck(hiOk) + "highest TF iFVG in the leg" + pdTxt
+            st.tl.push(label.new(g.t0, gMid, iZoneShow ? (cd ? "CISD" : g.tf + " iFVG") : "", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(c, 100), textcolor = c, size = size.tiny, tooltip = iZoneShow ? gTip : "", text_font_family = font.family_monospace))
+            string lbTxt = (isL ? "▲ " : "▼ ") + gT + " " + str.tostring(conf) + "/4 " + mdl + (rBad or scBad ? "✖" : "") + (cd ? " CISD" : "") + (jud ? " J" : "") + (inNews ? " NEWS" : "")
+            bool pill = iLbl == "Pills"
+            st.lb := label.new(bar_index, isL ? low : high, iSigShow ? lbTxt : "", xloc = xloc.bar_index, yloc = isL ? yloc.belowbar : yloc.abovebar, style = pill ? (isL ? label.style_label_up : label.style_label_down) : label.style_none, color = color.new(c, (not iSigShow or not pill) ? 100 : gN >= 2 ? 0 : 35), textcolor = color.new(pill ? f_on(c) : c, iSigShow ? 0 : 100), size = f_sz(), tooltip = iSigShow ? tip : "", text_font_family = font.family_monospace)
+            // older setup: keep label and iFVG box, drop its trade lines
+            if iTrade == "Last setup" and sts.size() > 0
+                St prv = sts.last()
+                for l in prv.ln
                     l.delete()
-                prv.tc.clear()
-        if iTrade != "Off"
-            int x2 = bar_index + 15
-            color nc = color.new(c, 100)
-            st.ln.push(line.new(bar_index, en, x2, en, color = c, width = 2))
-            st.ln.push(line.new(bar_index, sl, x2, sl, color = c, style = line.style_dotted))
-            st.tl.push(label.new(x2, sl, "SL " + str.tostring(risk, "#") + " pts" + (wide ? " · wide" : ""), style = label.style_label_left, color = nc, textcolor = c, size = size.tiny, text_font_family = font.family_monospace))
-            if dol
-                st.ln.push(line.new(bar_index, tp, x2, tp, color = c, style = line.style_dotted))
-                st.tl.push(label.new(x2, tp, "TP " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R · " + tpN, style = label.style_label_left, color = nc, textcolor = c, size = size.tiny, text_font_family = font.family_monospace))
-            if iBe and not na(beP)
-                st.ln.push(line.new(bar_index, beP, x2, beP, color = color.new(c, 40), style = line.style_dashed))
-                st.tl.push(label.new(x2, beP, "BE · " + beN, style = label.style_label_left, color = nc, textcolor = color.new(c, 30), size = size.tiny, text_font_family = font.family_monospace))
-            if iTp2 and not na(tp2)
-                st.ln.push(line.new(bar_index, tp2, x2, tp2, color = color.new(c, 40), style = line.style_dotted))
-                st.tl.push(label.new(x2, tp2, "TP2 " + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R · " + tp2N, style = label.style_label_left, color = nc, textcolor = color.new(c, 30), size = size.tiny, text_font_family = font.family_monospace))
-        if iLrlMk and iTrade != "Off" and lrN > 0
-            for i = 0 to lrN - 1
-                st.tc.push(label.new(lrB.get(i), lrP.get(i), "○", xloc = xloc.bar_index, yloc = yloc.price, style = isL ? label.style_label_down : label.style_label_up, color = color.new(c, 100), textcolor = color.new(c, 20), size = size.small, tooltip = "LRL touch " + str.tostring(i + 1) + " · " + f_prc(lrP.get(i))))
-        // MX Lite keeps older records and tracker references, but prevents later outcome text from resurfacing hidden tags.
-        if mxLiteView and iMxRecent and sts.size() > 0
-            for oldTr in trs
-                oldTr.tagVisible := false
-            for oldSt in sts
-                f_stHide(oldSt)
-        // auto outcome: a new setup flips any open opposite one (rule 10.7), then is tracked itself
-        if iTrack and okWin
-            for t in trs
-                if not t.done and t.d != d and bar_index > t.b0
-                    float rc = t.d == 1 ? (close - t.en) / t.risk : (t.en - close) / t.risk
-                    f_trkEnd(t, t.part ? t.bank + 0.5 * rc : rc, "flip (opposite setup)")
-            if risk > 0
-                float pL = dol ? (r1 >= 1.5 ? tp : p2R) : na
-                bool openRule = false
+                prv.ln.clear()
+                while prv.tl.size() > 1
+                    prv.tl.pop().delete()
+                if not na(prv.tc)
+                    for l in prv.tc
+                        l.delete()
+                    prv.tc.clear()
+            if iTrade != "Off"
+                int x2 = bar_index + 15
+                color nc = color.new(c, 100)
+                st.ln.push(line.new(bar_index, en, x2, en, color = c, width = 2))
+                st.ln.push(line.new(bar_index, sl, x2, sl, color = c, style = line.style_dotted))
+                st.tl.push(label.new(x2, sl, "SL " + str.tostring(risk, "#") + " pts" + (wide ? " · wide" : ""), style = label.style_label_left, color = nc, textcolor = c, size = size.tiny, text_font_family = font.family_monospace))
+                if dol
+                    st.ln.push(line.new(bar_index, tp, x2, tp, color = c, style = line.style_dotted))
+                    st.tl.push(label.new(x2, tp, "TP " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R · " + tpN, style = label.style_label_left, color = nc, textcolor = c, size = size.tiny, text_font_family = font.family_monospace))
+                if iBe and not na(beP)
+                    st.ln.push(line.new(bar_index, beP, x2, beP, color = color.new(c, 40), style = line.style_dashed))
+                    st.tl.push(label.new(x2, beP, "BE · " + beN, style = label.style_label_left, color = nc, textcolor = color.new(c, 30), size = size.tiny, text_font_family = font.family_monospace))
+                if iTp2 and not na(tp2)
+                    st.ln.push(line.new(bar_index, tp2, x2, tp2, color = color.new(c, 40), style = line.style_dotted))
+                    st.tl.push(label.new(x2, tp2, "TP2 " + str.tostring(math.abs(tp2 - en) / risk, "#.#") + "R · " + tp2N, style = label.style_label_left, color = nc, textcolor = color.new(c, 30), size = size.tiny, text_font_family = font.family_monospace))
+            if iLrlMk and iTrade != "Off" and lrN > 0
+                for i = 0 to lrN - 1
+                    st.tc.push(label.new(lrB.get(i), lrP.get(i), "○", xloc = xloc.bar_index, yloc = yloc.price, style = isL ? label.style_label_down : label.style_label_up, color = color.new(c, 100), textcolor = color.new(c, 20), size = size.small, tooltip = "LRL touch " + str.tostring(i + 1) + " · " + f_prc(lrP.get(i))))
+            // MX Lite keeps older records and tracker references, but prevents later outcome text from resurfacing hidden tags.
+            if mxLiteView and iMxRecent and sts.size() > 0
+                for oldTr in trs
+                    oldTr.tagVisible := false
+                for oldSt in sts
+                    f_stFade(oldSt, true)
+            // auto outcome: a new setup flips any open opposite one (rule 10.7), then is tracked itself
+            if iTrack and okWin
                 for t in trs
-                    if t.rule and not t.done
-                        openRule := true
-                bool allowed = not openRule and ui.nTk < 2 and ui.nLoss < 2
-                if allowed
-                    ui.nTk += 1
-                Tr nt = Tr.new(d, en, sl, risk, pL, tp2, beP, slC, slE, bar_index, time, st.lb, lbTxt, tip)
-                nt.rule := allowed
-                nt.tagVisible := iSigShow
-                trs.push(nt)
-                while trs.size() > 60
-                    trs.shift()
-        if okWin
-            if gN >= 2
-                ui.nAp += 1
-            else if gN == 1
-                ui.nA += 1
-        sts.push(st)
-        while sts.size() > iKeep
-            f_stDel(sts.shift())
-        ui.grade := gT + " · " + str.tostring(conf) + "/4"
-        ui.dir := (isL ? "LONG" : "SHORT") + " " + mdl + (rBad ? "✖" : "")
-        ui.swept := s.nm
-        ui.tm := str.format_time(time, "dd MMM HH:mm", NY)
-        if okWin
-            ui.lastB := bar_index
-            ui.lastL := isL
-            ui.lastG := gT
-        ui.fv := cd ? "CISD" : g.tf + (jud or hiOk ? "" : " · " + pdTf + " open")
-        ui.fvOk := jud or hiOk
-        ui.when := inNews ? "news" : not inWin ? "outside windows" : jud ? "judas" : inMacro ? "macro" : "in window"
-        ui.okD := delOk and (s.key or intSw) ? 1 : 0
-        ui.sD := htf ? htfN : "no HTF FVG"
-        ui.okT := dol and lrOk and not tpH ? 1 : 0
-        ui.sT := dol ? tpN + " " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "no draw"
-        ui.okE := (vsh or cd) and disp and (hiOk or cd or jud) and not intTk ? 1 : 0
-        ui.sE := cd ? "CISD" : "iFVG " + g.tf
-        pv.clear()
-        pv.push(vsh ? 1 : 0)
-        pv.push(disp ? 1 : 0)
-        pv.push(htf ? 1 : 0)
-        pv.push(dol ? 1 : 0)
-        pv.push(ttOk ? 1 : 0)
-        pv.push(cisd ? 1 : 0)
-        pv.push(div ? 1 : 0)
-        pv.push(smtOn ? (smtP ? 1 : 0) : 2)
-        ui.intL := intTk ? 0 : 1
-        ui.lrl := dol ? str.tostring(lrN) + " / " + str.tostring(lrNeed) : "-"
-        ui.lrOk := dol ? (lrOk ? 1 : 0) : 2
-        // A displayed rulebook-blocked B is informational by default; the explicit
-        // study override keeps the original alert windows and marks the payload.
-        if okWin and (not hardB or iAlBlockedB)
-            ui.alMsg := "SNM+ " + (hardB ? "STUDY BLOCKED · " : "") + (isL ? "LONG " : "SHORT ") + gT + " " + str.tostring(conf) + "/4 " + (mdl == "C" ? "CONTINUATION" : mdl == "RB" ? "REBALANCE" : mdl == "RV" ? "REVERSAL" : "") + (cd ? " SWEEP+CISD" : "") + (rBad ? " (outside NY AM)" : "") + (jud ? " JUDAS" : "") + " · " + syminfo.ticker + " · swept " + s.nm + " · entry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#") + " pts) · " + (dol ? "TP " + f_prc(tp) + " " + tpN : "no draw") + " · " + str.tostring(n) + " contracts"
+                    if not t.done and t.d != d and bar_index > t.b0
+                        float rc = t.d == 1 ? (close - t.en) / t.risk : (t.en - close) / t.risk
+                        f_trkEnd(t, t.part ? t.bank + 0.5 * rc : rc, "flip (opposite setup)")
+                if risk > 0
+                    float pL = dol ? (r1 >= 1.5 ? tp : p2R) : na
+                    bool openRule = false
+                    for t in trs
+                        if t.rule and not t.done
+                            openRule := true
+                    bool allowed = not openRule and ui.nTk < 2 and ui.nLoss < 2
+                    if allowed
+                        ui.nTk += 1
+                    Tr nt = Tr.new(d, en, sl, risk, pL, tp2, beP, slC, slE, bar_index, time, st.lb, lbTxt, tip)
+                    nt.rule := allowed
+                    nt.tagVisible := iSigShow
+                    trs.push(nt)
+                    while trs.size() > 60
+                        trs.shift()
+            if okWin
+                if gN >= 2
+                    ui.nAp += 1
+                else if gN == 1
+                    ui.nA += 1
+            sts.push(st)
+            while sts.size() > iKeep
+                f_stDel(sts.shift())
+            ui.grade := gT + " · " + str.tostring(conf) + "/4"
+            ui.dir := (isL ? "LONG" : "SHORT") + " " + mdl + (rBad ? "✖" : "")
+            ui.swept := s.nm
+            ui.tm := str.format_time(time, "dd MMM HH:mm", NY)
+            if okWin
+                ui.lastB := bar_index
+                ui.lastL := isL
+                ui.lastG := gT
+            ui.fv := cd ? "CISD" : g.tf + (jud or hiOk ? "" : " · " + pdTf + " open")
+            ui.fvOk := jud or hiOk
+            ui.when := inNews ? "news" : not inWin ? "outside windows" : jud ? "judas" : inMacro ? "macro" : "in window"
+            ui.okD := delOk and (s.key or intSw) ? 1 : 0
+            ui.sD := htf ? htfN : "no HTF FVG"
+            ui.okT := dol and lrOk and not tpH ? 1 : 0
+            ui.sT := dol ? tpN + " " + str.tostring(math.abs(tp - en) / risk, "#.#") + "R" : "no draw"
+            ui.okE := (vsh or cd) and disp and (hiOk or cd or jud) and not intTk ? 1 : 0
+            ui.sE := cd ? "CISD" : "iFVG " + g.tf
+            pv.clear()
+            pv.push(vsh ? 1 : 0)
+            pv.push(disp ? 1 : 0)
+            pv.push(htf ? 1 : 0)
+            pv.push(dol ? 1 : 0)
+            pv.push(ttOk ? 1 : 0)
+            pv.push(cisd ? 1 : 0)
+            pv.push(div ? 1 : 0)
+            pv.push(smtOn ? (smtP ? 1 : 0) : 2)
+            ui.intL := intTk ? 0 : 1
+            ui.lrl := dol ? str.tostring(lrN) + " / " + str.tostring(lrNeed) : "-"
+            ui.lrOk := dol ? (lrOk ? 1 : 0) : 2
+            // A displayed rulebook-blocked B is informational by default; the explicit
+            // study override keeps the original alert windows and marks the payload.
+            if okWin and (not hardB or iAlBlockedB)
+                ui.alMsg := "SNM+ " + (hardB ? "STUDY BLOCKED · " : "") + (isL ? "LONG " : "SHORT ") + gT + " " + str.tostring(conf) + "/4 " + (mdl == "C" ? "CONTINUATION" : mdl == "RB" ? "REBALANCE" : mdl == "RV" ? "REVERSAL" : "") + (cd ? " SWEEP+CISD" : "") + (rBad ? " (outside NY AM)" : "") + (jud ? " JUDAS" : "") + " · " + syminfo.ticker + " · swept " + s.nm + " · entry " + f_prc(en) + " · stop " + f_prc(sl) + " (" + str.tostring(risk, "#") + " pts) · " + (dol ? "TP " + f_prc(tp) + " " + tpN : "no draw") + " · " + str.tostring(n) + " contracts"
     true
-
 // ───────── engine, closed bars only
 // only the recent history is calculated: much faster loading
 bool calc = time >= last_bar_time - iDays * 86400000
+Gp candS = na
+Gp candL = na
+Gp pendS = na
+Gp pendL = na
+Gp noPend = na
+Gp cisdS = na
+Gp cisdL = na
+int dirCS = 0
+int dirCL = 0
 if barstate.isconfirmed and calc
     // Register only completed HTF events: the requested tuple carries the prior candle's
     // CISD on the first chart bar of the next HTF candle. No live HTF close is consulted.
@@ -1990,9 +1985,9 @@ if barstate.isconfirmed and calc
                             ui.stageMsg := (isL ? "L " : "S ") + "REJECTED · " + (liqTk ? "LIQ TAKEN" : "CLOSE BACK")
                         float wk = isL ? high : low
                         string rt = "✖ REJECTED · " + (isL ? "LONG " : "SHORT ") + f_gT(pg) + " " + pm
-                        rt += "\n\nthe candle traded through the trigger " + f_prc(ptr) + " (" + ptt + ") to " + f_prc(wk) + " but closed back at " + f_prc(close) + ": no confirmation (rule 3: close only)"
-                        rt += "\nwick beyond the trigger: " + str.tostring(math.abs(wk - ptr), "#.##") + " pts · body " + str.tostring(math.abs(close - open), "#.##") + " pts"
-                        rt += liqTk ? "\n\nthe wick also took the liquidity on the target side → setup cancelled (rule 1.6: internal liquidity already swept)" : "\n\nthe setup stays armed: a later close through the trigger can still confirm it"
+                        rt += "\n\ntraded through trigger " + f_prc(ptr) + " (" + ptt + ") to " + f_prc(wk) + " closed back " + f_prc(close) + ": no confirmation"
+                        rt += "\nwick beyond: " + str.tostring(math.abs(wk - ptr), "#.##") + " body " + str.tostring(math.abs(close - open), "#.##")
+                        rt += liqTk ? "\n\nwick took target liquidity → cancelled (rule 1.6)" : "\n\nsetup stays armed: later close can confirm"
                         color rc = liqTk ? cWarn : cNeu
                         // full tag only when it matters: target liquidity taken, or an A+ whose wick went clearly through; otherwise a small ×
                         bool deep = math.abs(wk - ptr) >= math.max(iClrAtr * atr, 2 * syminfo.mintick)
@@ -2001,12 +1996,10 @@ if barstate.isconfirmed and calc
                         while rjLb.size() > 20
                             rjLb.shift().delete()
                         if okWin and iAlRejected and f_alertAllowed()
-                            alert("SNM+ REJECTED " + (isL ? "LONG " : "SHORT ") + f_gT(pg) + " · " + syminfo.ticker + " · traded through " + f_prc(ptr) + " but closed back" + (liqTk ? " · target liquidity taken, setup cancelled" : ""), alert.freq_once_per_bar_close)
+                            alert("SNM+ REJECTED " + (isL ? "LONG " : "SHORT ") + f_gT(pg) + " · " + syminfo.ticker + " · through " + f_prc(ptr) + " closed back" + (liqTk ? " · liq taken, cancelled" : ""), alert.freq_once_per_bar_close)
 
     // Inspect registered gap close-throughs before removing them. A raw gap that
     // failed size or was never formed is not in this registry (see guide).
-    Gp bS = na
-    Gp bL = na
     string failS = ""
     string failL = ""
     if gps.size() > 0
@@ -2017,54 +2010,65 @@ if barstate.isconfirmed and calc
                     if iDiag and failS == ""
                         failS := f_dbgGate(swS, g)
                     if swS.on and bar_index - swS.extB <= iInvMax and g.b >= swS.extB - 30 and g.rk > swS.rk
-                        if na(bS)
-                            bS := g
-                        else if g.rk > bS.rk or (g.rk == bS.rk and g.top - g.bot > bS.top - bS.bot)
-                            bS := g
+                        if na(candS)
+                            candS := g
+                        else if g.rk > candS.rk or (g.rk == candS.rk and g.top - g.bot > candS.top - candS.bot)
+                            candS := g
                     gps.remove(i)
                 else if not g.bull and close > g.top
                     if iDiag and failL == ""
                         failL := f_dbgGate(swL, g)
                     if swL.on and bar_index - swL.extB <= iInvMax and g.b >= swL.extB - 30 and g.rk > swL.rk
-                        if na(bL)
-                            bL := g
-                        else if g.rk > bL.rk or (g.rk == bL.rk and g.top - g.bot > bL.top - bL.bot)
-                            bL := g
+                        if na(candL)
+                            candL := g
+                        else if g.rk > candL.rk or (g.rk == candL.rk and g.top - g.bot > candL.top - candL.bot)
+                            candL := g
                     gps.remove(i)
                 else if bar_index - g.b > 120
                     gps.remove(i)
-    if iDiag and na(bS)
+    if iDiag and na(candS)
         f_dbgAdd(-1, close, failS)
-    if iDiag and na(bL)
+    if iDiag and na(candL)
         f_dbgAdd(1, close, failL)
     // a higher timeframe gap still open in the leg keeps the sweep alive for its own inversion
-    if not na(bS)
-        Gp pS = f_pend(true, bS, swS)
-        f_setup(-1, bS, swS, pS, false)
-        if na(pS)
-            swS.on := false
-        else
-            swS.rk := bS.rk
-    if not na(bL)
-        Gp pL = f_pend(false, bL, swL)
-        f_setup(1, bL, swL, pL, false)
-        if na(pL)
-            swL.on := false
-        else
-            swL.rk := bL.rk
+    if not na(candS)
+        pendS := f_pend(true, candS, swS)
+    if not na(candL)
+        pendL := f_pend(false, candL, swL)
     // Sweep + CISD (rulebook 6.6): the CISD close comes first, no inverted gap on that candle; one per sweep
-    Gp noPd = na
-    if iSc and na(bS) and swS.on and not swS.cd and bar_index > swS.extB and bar_index - swS.extB <= cdBars
+    if iSc and na(candS) and swS.on and not swS.cd and bar_index > swS.extB and bar_index - swS.extB <= cdBars
         [cS, oS] = f_cisd(false, bar_index - swS.extB)
         if not na(cS) and close < cS and close[1] >= cS
-            f_setup(-1, Gp.new(true, cS + 0.1 * atr, cS, time[oS], bar_index - oS, "CISD", 0), swS, noPd, true)
-            swS.cd := true
-    if iSc and na(bL) and swL.on and not swL.cd and bar_index > swL.extB and bar_index - swL.extB <= cdBars
+            dirCS := -1
+            cisdS := Gp.new(true, cS + 0.1 * atr, cS, time[oS], bar_index - oS, "CISD", 0)
+    if iSc and na(candL) and swL.on and not swL.cd and bar_index > swL.extB and bar_index - swL.extB <= cdBars
         [cL, oL2] = f_cisd(true, bar_index - swL.extB)
         if not na(cL) and close > cL and close[1] <= cL
-            f_setup(1, Gp.new(false, cL, cL - 0.1 * atr, time[oL2], bar_index - oL2, "CISD", 0), swL, noPd, true)
-            swL.cd := true
+            dirCL := 1
+            cisdL := Gp.new(false, cL, cL - 0.1 * atr, time[oL2], bar_index - oL2, "CISD", 0)
 
+// Evaluate the setup helper on every chart calculation. A zero direction is a no-op;
+// qualified calls stay in the same order relative to sweep-state updates.
+f_setup(not na(candS) ? -1 : 0, candS, swS, pendS, false)
+if not na(candS)
+    if na(pendS)
+        swS.on := false
+    else
+        swS.rk := candS.rk
+f_setup(not na(candL) ? 1 : 0, candL, swL, pendL, false)
+if not na(candL)
+    if na(pendL)
+        swL.on := false
+    else
+        swL.rk := candL.rk
+f_setup(dirCS, cisdS, swS, noPend, true)
+if dirCS != 0
+    swS.cd := true
+f_setup(dirCL, cisdL, swL, noPend, true)
+if dirCL != 0
+    swL.cd := true
+
+if barstate.isconfirmed and calc
     // new chart gaps
     float gMin = math.max(iGapMin * atr, 2 * syminfo.mintick)
     if low > high[2] and low - high[2] >= gMin
@@ -2565,7 +2569,7 @@ if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     tb.cell(1, 4, "A+ " + str.tostring(ui.nAp) + " · A " + str.tostring(ui.nA) + " · max 2 trades", text_color = ui.nAp + ui.nA > 2 ? cWarn : cTx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     if iStageRow
         tb.cell(0, 5, "Now", text_color = cTx, text_size = pSz, text_halign = text.align_left)
-        tb.cell(1, 5, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Current confirmed evaluation wins; PREV CLOSE is the preceding chart bar's close, shown for one bar only. Otherwise live sweep/preview. ELIGIBLE is not alert delivery. D/T/E describes the last shown setup.")
+        tb.cell(1, 5, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
 if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.set_position(panelPosition)
     color tx = cTx
@@ -2603,5 +2607,5 @@ if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.cell(1, 18, iTrack ? (ui.dR >= 0 ? "+" : "") + str.tostring(ui.dR, "#.##") + "R · " + str.tostring(ui.nTk) + " / 2 trades" : "", text_color = ui.dR >= 0 ? cOk : cBad, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     if iStageRow
         tb.cell(0, 19, "Now", text_color = tx, text_size = pSz, text_halign = text.align_left)
-        tb.cell(1, 19, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Current confirmed evaluation wins; PREV CLOSE is the preceding chart bar's close, shown for one bar only. Otherwise live sweep/preview. ELIGIBLE is not alert delivery. Rows above describe the last shown setup.")
+        tb.cell(1, 19, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
     tb.cell(1, 14, (inNews ? "NEWS" : inMacro ? "macro" : inWin ? "in window" : "outside windows") + (inWin and not na(minLeft) ? " · " + str.tostring(minLeft) + " min left" : ""), text_color = inNews ? cWarn : inWin ? cOk : mu, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
