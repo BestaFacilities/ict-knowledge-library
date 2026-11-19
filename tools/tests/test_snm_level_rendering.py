@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""AST regression for SNM+ 3.62's NY PM active-liquidity and display changes.
+"""AST regression for SNM+ 3.63's combined NY range and dated session labels.
 
 Run with hoox-pyne installed: python tools/tests/test_snm_level_rendering.py
-The active sweep/target helpers must remain identical to 3.61. Swept history is display-only,
-while the configurable NY PM high/low is deliberately registered as active liquidity and uses
-that existing sweep path. Positive controls mutate the sweep predicate, NY PM registration and
-core classification, priority selection, history eviction/cap and sweep endpoint; the AST must detect them.
-This is not TradingView compilation or chart-rendering verification.
+The active sweep/target path must remain identical to 3.62. Completed Asia, London and NY
+ranges use DD/MM labels; the date is taken from the New York calendar date of each extreme bar.
+A separate NY AM rulebook window remains for the original reversal / Sweep + CISD gate.
+Positive controls mutate session registration, the combined NY hours, date formatting, stable
+session identity, core priority, sweep handling and swept-history behavior. This is not TradingView
+compilation or chart-rendering verification.
 """
 from pathlib import Path
 import subprocess
 
 from pynescript.ast import If, dump, parse, unparse, walk
 
-BASE = "cb10a7e"
+BASE = "8208b5c"
 ROOT = Path(__file__).resolve().parents[2]
 CURRENT = ROOT / "tools/snm-plus.pine"
 SWEEP_HEADER = "if v.hi ? high > v.px : low < v.px"
@@ -41,42 +42,80 @@ def sweep_projection(tree, header=SWEEP_HEADER):
     return [dump(node.test)] + [dump(stmt) for stmt in node.body if head(stmt) != "f_lvHitAdd(v)"]
 
 
+def replace_once(text, old, new):
+    assert text.count(old) == 1, (old, text.count(old))
+    return text.replace(old, new, 1)
+
+
 def main():
     old_source = subprocess.check_output(["git", "show", BASE + ":tools/snm-plus.pine"], cwd=ROOT, text=True)
     new_source = CURRENT.read_text()
     old = parse(old_source)
     new = parse(new_source)
 
-    # No active-liquidity, target, continuation, or setup engine helper changed.
-    for name in ("f_sweep", "f_draw", "f_edge", "f_addLv", "f_addSw", "f_preview"):
-        assert dump(function(old, name)) == dump(function(new, name)), f"non-display helper changed: {name}"
+    # No sweep, target, edge, swing, preview or swept-history logic changed.
+    for name in ("f_sweep", "f_draw", "f_edge", "f_addSw", "f_preview", "f_lvHitAdd"):
+        assert dump(function(old, name)) == dump(function(new, name)), f"active/display helper changed: {name}"
     old_sweep = find_if(old, SWEEP_HEADER)
     new_sweep = find_if(new, SWEEP_HEADER)
     assert [head(stmt) for stmt in old_sweep.body] == ["f_sweep(v)", "f_lvHitAdd(v)", "lvs.remove(i)"]
     assert [head(stmt) for stmt in new_sweep.body] == ["f_sweep(v)", "f_lvHitAdd(v)", "lvs.remove(i)"]
     assert sweep_projection(old) == sweep_projection(new), "sweep handling changed beyond the history-record call"
 
-    # NY PM (default 13:00–16:00 New York) joins the common active-session level path.
-    assert 'bool iNypm = input.bool(true, "NY PM"' in new_source
-    assert 'string sNypm = input.session("1300-1600"' in new_source
-    assert "bool inNypm = f_in(sNypm)" in new_source
-    assert 'array<string> sNm = array.from("ASIA", "LON", "PRE", "AM", "NYPM")' in new_source
-    assert 'var array<float> sH = array.new<float>(5, na)' in new_source
-    assert 'var array<bool> sWas = array.new<bool>(5, false)' in new_source
-    session_gate = find_if(new, "if barstate.isconfirmed and calc")
-    session_text = unparse(session_gate)
-    assert "iNypm and inNypm" in session_text
-    assert "for s = 0 to 4" in session_text
-    assert 'f_addLv(sH.get(s), true, sNm.get(s) + ".H"' in session_text
-    assert 'f_addLv(sL.get(s), false, sNm.get(s) + ".L"' in session_text
-    assert 'sNm.get(s) + ".H"' in session_text and 'sNm.get(s) + ".L"' in session_text
+    # The only active-registry helper change is stable identity for date-prefixed session names.
+    old_add = unparse(function(old, "f_addLv"))
+    identity_comparison = "if lvs.get(i).nm == nm"
+    assert old_add.count(identity_comparison) == 2
+    expected_add = old_add.replace(identity_comparison, "if f_lvKey(lvs.get(i).nm) == f_lvKey(nm)", 1)
+    new_add = unparse(function(new, "f_addLv"))
+    assert expected_add == new_add, "active-level insertion changed beyond dated session identity"
 
-    # Active session + prior-day levels bypass the optional additional-level count by default.
+    # Exactly one combined NY liquidity range; NY AM stays only as a separate rulebook clock.
+    assert 'bool iNy = input.bool(true, "New York (NY)"' in new_source
+    assert 'string sNy = input.session("0930-1600"' in new_source
+    assert "bool inNy = f_in(sNy)" in new_source
+    assert 'string sNyRule = input.session("0930-1100", "NY AM rulebook window"' in new_source
+    assert "bool inAm = f_in(sNyRule)" in new_source
+    assert 'bool iSessDate = input.bool(true, "Date-stamp Asia/London/NY labels"' in new_source
+    assert 'array<bool> inS = array.from(iAs and inAs, iLo and inLo, iPr and inPr, iNy and inNy)' in new_source
+    assert 'array<string> sNm = array.from("ASIA", "LON", "PRE", "NY")' in new_source
+    assert 'for s = 0 to 3' in new_source
+    assert "iAm" not in new_source and "iNypm" not in new_source and "sNypm" not in new_source and "NYPM" not in new_source
+    assert new_source.count("not inAm") == 3, "the original NY AM rulebook checks must remain separate from the NY pool"
+    assert "inAm ? f_left(sNyRule)" in new_source
+    assert 'string iWin = input.string("2000-0000,0200-0500,0930-1100"' in new_source
+
+    # Track the timestamp of each extreme bar so its visible date is stable and timezone-explicit.
+    for declaration in (
+        'var array<int> sHt = array.new<int>(4, 0)',
+        'var array<int> sLt = array.new<int>(4, 0)',
+        'sHt.set(s, time)',
+        'sLt.set(s, time)',
+        'f_sessionLevelName(sNm.get(s), true, sHt.get(s))',
+        'f_sessionLevelName(sNm.get(s), false, sLt.get(s))',
+    ):
+        assert declaration in new_source, declaration
+    assert new_source.count("sHt.set(s, time)") == 2
+    assert new_source.count("sLt.set(s, time)") == 2
+    label_fn = unparse(function(new, "f_sessionLevelName"))
+    assert 'str.format_time(levelTime, "dd/MM", NY)' in label_fn
+    assert 'sessionName == "PRE" or not iSessDate ? base :' in label_fn, "premarket stays undated and the date prefix can be toggled off"
+    key_fn = unparse(function(new, "f_lvKey"))
+    assert 'str.substring(nm, 2, 3) == "/"' in key_fn
+    assert 'str.substring(nm, 5, 6) == " "' in key_fn
+    assert 'str.substring(nm, 6, str.length(nm))' in key_fn
+    dated_session_fn = unparse(function(new, "f_isDatedSessionLevel"))
+    for name in ('"ASIA.H"', '"ASIA.L"', '"LON.H"', '"LON.L"', '"NY.H"', '"NY.L"'):
+        assert name in dated_session_fn, name
+    session_fn = unparse(function(new, "f_isSessionLevel"))
+    for name in ('"ASIA.H"', '"ASIA.L"', '"LON.H"', '"LON.L"', '"PRE.H"', '"PRE.L"', '"NY.H"', '"NY.L"'):
+        assert name in session_fn, name
+    assert "f_isSessionLevel(nm)" in unparse(function(new, "f_isCoreLevel"))
+    assert 'string tx = v.nm + (v.hrl ? " · HRL" : f_isDatedSessionLevel(v.nm) ? "" : " $$$")' in new_source
+
+    # Core session + prior-day levels stay additive to the selected per-side secondary count.
     assert 'bool iLvCore = input.bool(true, "Always show sessions + PDH/PDL"' in new_source
     assert 'int iLvN = input.int(2, "other / side", minval = 0' in new_source
-    core = unparse(function(new, "f_isCoreLevel"))
-    for name in ('"PDH"', '"PDL"', '"ASIA."', '"LON."', '"PRE."', '"AM."', '"NYPM."'):
-        assert name in core, name
     levels = find_if(new, LEVEL_HEADER)
     level_text = unparse(levels)
     assert "bool coreDone = not iLvCore" in level_text
@@ -98,49 +137,57 @@ def main():
     assert "label.set_xy(old.lb, old.sweepB, old.px)" in hit_text
     assert "line.delete(dropped.ln)" in hit_text and "label.delete(dropped.lb)" in hit_text
 
-    # Positive control 1: removing NY PM from the session selector must trip the level-engine AST.
-    session_selector = "iNypm and inNypm"
-    assert new_source.count(session_selector) == 1
-    bad_session = parse(new_source.replace(session_selector, "false", 1))
-    assert dump(find_if(bad_session, "if barstate.isconfirmed and calc")) != dump(session_gate), "positive control missed NY PM session registration"
+    # Positive control 1: removing the combined NY range from the selector trips registration.
+    session_gate = find_if(new, "if barstate.isconfirmed and calc")
+    session_selector = "iNy and inNy"
+    bad_session = parse(replace_once(new_source, session_selector, "false"))
+    assert dump(find_if(bad_session, "if barstate.isconfirmed and calc")) != dump(session_gate), "positive control missed NY registration"
 
-    # Positive control 2: omitting NYPM from core classification must trip that helper's AST.
-    core_marker = 'str.startswith(nm, "NYPM.")'
-    assert new_source.count(core_marker) == 1
-    bad_core = parse(new_source.replace(core_marker, 'str.startswith(nm, "NYPMX.")', 1))
-    assert dump(function(bad_core, "f_isCoreLevel")) != dump(function(new, "f_isCoreLevel")), "positive control missed NY PM core priority"
+    # Positive control 2: shifting the session back to an AM-only range is detected.
+    bad_hours_source = replace_once(new_source, 'input.session("0930-1600"', 'input.session("0930-1100"')
+    bad_hours = parse(bad_hours_source)
+    assert unparse(bad_hours) != unparse(new), "positive control missed the combined NY hours"
 
-    # Positive control 3: a sweep boundary mutation must trip the AST projection.
-    assert old_source.count(SWEEP_HEADER) == 1
+    # Positive control 3: changing the required DD/MM label format trips the date-name helper.
+    bad_date = parse(replace_once(new_source, 'str.format_time(levelTime, "dd/MM", NY)', 'str.format_time(levelTime, "MM/dd", NY)'))
+    assert unparse(function(bad_date, "f_sessionLevelName")) != label_fn, "positive control missed changed date format"
+
+    # Positive control 4: restoring full-label equality would accumulate a new live level each day.
+    bad_identity = parse(replace_once(new_source, "if f_lvKey(lvs.get(i).nm) == f_lvKey(nm)", identity_comparison))
+    assert unparse(function(bad_identity, "f_addLv")) != new_add, "positive control missed unstable dated identity"
+
+    # Positive control 5: omitting NY levels from core classification must trip the helper AST.
+    core_marker = 'key == "NY.H" or key == "NY.L"\n\nf_isCoreLevel'
+    bad_core = parse(replace_once(new_source, core_marker, 'key == "NY.X" or key == "NY.L"\n\nf_isCoreLevel'))
+    assert unparse(function(bad_core, "f_isSessionLevel")) != session_fn, "positive control missed NY core priority"
+
+    # Positive control 6: a sweep boundary mutation must trip the AST projection.
     mutated_header = "if v.hi ? high >= v.px : low < v.px"
-    bad_sweep = parse(old_source.replace(SWEEP_HEADER, mutated_header, 1))
+    bad_sweep = parse(replace_once(old_source, SWEEP_HEADER, mutated_header))
     assert sweep_projection(bad_sweep, mutated_header) != sweep_projection(new), "positive control missed changed sweep predicate"
 
-    # Positive control 4: reversing the core/secondary selector must trip the rendered block AST.
+    # Positive control 7: reversing the core/secondary selector must trip the rendered block AST.
     selector = "bool wanted = corePass ? core : (not iLvCore or not core)"
     assert new_source.count(selector) == 1
-    bad_priority = parse(new_source.replace(selector, "bool wanted = corePass ? not core : (not iLvCore or not core)", 1))
+    bad_priority = parse(replace_once(new_source, selector, "bool wanted = corePass ? not core : (not iLvCore or not core)"))
     assert dump(find_if(bad_priority, LEVEL_HEADER)) != dump(levels), "positive control missed changed priority"
 
-    # Positive control 5: evicting core history first must trip the helper AST.
+    # Positive control 8: evicting core history first must trip the helper AST.
     eviction = "if not lvHits.get(i).core"
-    assert new_source.count(eviction) == 1
-    bad_eviction = parse(new_source.replace(eviction, "if lvHits.get(i).core", 1))
+    bad_eviction = parse(replace_once(new_source, eviction, "if lvHits.get(i).core"))
     assert dump(function(bad_eviction, "f_lvHitAdd")) != dump(hit_add), "positive control missed changed core-history priority"
 
-    # Positive control 6: an off-by-one history cap must trip the helper AST.
+    # Positive control 9: an off-by-one history cap must trip the helper AST.
     cap = "while lvHits.size() > iLvHist"
-    assert new_source.count(cap) == 1
-    bad_cap = parse(new_source.replace(cap, "while lvHits.size() >= iLvHist", 1))
+    bad_cap = parse(replace_once(new_source, cap, "while lvHits.size() >= iLvHist"))
     assert dump(function(bad_cap, "f_lvHitAdd")) != dump(hit_add), "positive control missed changed history cap"
 
-    # Positive control 7: extending a new segment one bar past its sweep must be visible in the helper AST.
+    # Positive control 10: extending a new segment one bar past its sweep must trip the helper AST.
     endpoint = "line.new(x1, v.px, bar_index, v.px"
-    assert new_source.count(endpoint) == 1
-    bad_endpoint = parse(new_source.replace(endpoint, "line.new(x1, v.px, bar_index + 1, v.px", 1))
+    bad_endpoint = parse(replace_once(new_source, endpoint, "line.new(x1, v.px, bar_index + 1, v.px"))
     assert dump(function(bad_endpoint, "f_lvHitAdd")) != dump(hit_add), "positive control missed changed sweep endpoint"
 
-    print("PASS: 3.61 sweep/target helpers unchanged; NY PM joins active liquidity; swept history is display-only; seven AST mutation controls fired")
+    print("PASS: 3.62 sweep/target paths preserved; combined NY + dated session labels registered; swept history/core priority intact; ten AST mutation controls fired")
 
 
 if __name__ == "__main__":
