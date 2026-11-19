@@ -12,6 +12,7 @@ The **working script is `tools/snm-plus.pine` (3.63)**; the exact uploaded 3.47 
 | `snm-plus-guide.md`, `snm-settings-by-pair.md` | Current usage and maintained pair/timeframe settings; update with input changes. |
 | `snm-integration-plan.md` | Feature-by-feature CISD Model+ comparison, shipped first pass and deferred experimental candidates. |
 | `snm-manipulationx-v9-comparison.md` | Comparison of the user's 11 ManipulationX V9 screenshots and transcript with SNM+ 3.63; design observations only, no code port or behavior changes. |
+| `snm-manipulationx-v9-roadmap.md` | Prioritized, staged recommendations for useful V9-inspired presentation features, existing SNM+ equivalents, safe integration boundaries, and acceptance checks; planning only. |
 | `snm-355-verification.md` | 3.55 local check results and user-reported Current/Clean replay match; feed/date/warnings/forward-alert status remain unreported. This record does not verify 3.56. |
 | `archive/legacy-indicators/` | Earlier CISD/CRT and ManipulationX scripts, studies, guides, settings matrix, and scale-table helper, moved here unchanged for retrieval. See its README. |
 | `archive/` | Earlier archived indicator revisions, also retained unchanged. |

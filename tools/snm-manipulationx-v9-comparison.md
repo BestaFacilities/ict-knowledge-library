@@ -8,7 +8,7 @@ The settings shown are the saved state of the pictured TradingView instance, not
 
 ## Bottom line
 
-The overlap is substantial in the visible toolkit: named liquidity, sweeps, iFVGs, HTF FVG context, SMT, signal tooltips, a checklist, and risk-plan drawings. SNM+ already has those building blocks, but it arranges them around the user's D/T/E rulebook and C/RB/RV setup semantics. The clearest product-level differences are V9's independently switchable signal/zone visibility, its recent-only presentation, separate visual liquidity detectors and event-alert categories, a fuller always-visible checklist, and its 8AM/9AM range inputs.
+The overlap is substantial in the visible toolkit: named liquidity, sweeps, iFVGs, HTF FVG context, SMT, signal tooltips, a checklist, and risk-plan drawings. SNM+ already has those building blocks, but it arranges them around the user's D/T/E rulebook and C/RB/RV setup semantics. The clearest product-level differences are V9's independently switchable signal/zone visibility, its recent-only presentation, separate visual liquidity detectors and event-alert categories, a fuller always-visible checklist, and its 8AM/9AM range inputs. The recommended priorities and staged integration boundaries are in `tools/snm-manipulationx-v9-roadmap.md`.
 
 The biggest semantic trap is **LRL/HRL**. The same labels refer to materially different constructions in the V9 narration, SNM+'s current calculations, and the ICT corpus. They should not be copied or promoted into SNM+ gates by name alone. Most of V9's optional filters should likewise not become new SNM+ vetoes: several overlap checks that already affect SNM+'s grade or rulebook.
 
