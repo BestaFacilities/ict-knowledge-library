@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AST regression for SNM+ 3.63's combined NY range and dated session labels.
+"""AST regression for SNM+ 3.63 levels and 3.64's compact MX Lite view.
 
 Run with hoox-pyne installed: python tools/tests/test_snm_level_rendering.py
 The active sweep/target path must remain identical to 3.62. Completed Asia, London and NY
@@ -121,7 +121,7 @@ def main():
     assert "bool coreDone = not iLvCore" in level_text
     assert "bool corePass = iLvCore and not coreDone" in level_text
     assert "bool wanted = corePass ? core : not iLvCore or not core" in level_text
-    assert "int otherLimit = cleanView ? 1 : iLvN" in level_text
+    assert "int otherLimit = compactView ? 1 : iLvN" in level_text
 
     # Taken levels are capped display records and their line terminates at the sweep bar.
     assert 'bool iLvSwept = input.bool(true, "Keep swept levels to their sweep"' in new_source
@@ -187,7 +187,7 @@ def main():
     bad_endpoint = parse(replace_once(new_source, endpoint, "line.new(x1, v.px, bar_index + 1, v.px"))
     assert dump(function(bad_endpoint, "f_lvHitAdd")) != dump(hit_add), "positive control missed changed sweep endpoint"
 
-    print("PASS: 3.62 sweep/target paths preserved; combined NY + dated session labels registered; swept history/core priority intact; ten AST mutation controls fired")
+    print("PASS: 3.62 sweep/target paths preserved; combined NY + dated session labels registered; swept history/core priority and compact-view level count intact; ten AST mutation controls fired")
 
 
 if __name__ == "__main__":

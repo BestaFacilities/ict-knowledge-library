@@ -1,6 +1,6 @@
 //@version=6
-// SNM+ 3.63 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
-// 3.63 uses one NY session and date-stamped NY / Asia / London level labels.
+// SNM+ 3.64 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.64 adds a display-only MX Lite view; 3.63 uses one NY session and date-stamped NY / Asia / London level labels.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -23,7 +23,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.63", shorttitle = "SNM+ 3.63", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.64", shorttitle = "SNM+ 3.64", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -174,10 +174,15 @@ string iTrade = input.string("Last setup", "Entry / stop / target lines", option
 int iDays = input.int(5, "History to calculate (days)", minval = 1, maxval = 60, group = G_D, tooltip = "SNM+ only runs its engine on the last N days before the last candle (in replay: before the replay candle). 5 days loads fast and is enough for every level and gap a session needs. raise it only if you want older setups drawn")
 int iKeep = input.int(3, "Setups kept on the chart", minval = 1, maxval = 30, group = G_D)
 string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"], group = G_D, tooltip = "Simple: D/T/E panel and plan + missing checks. Full: expanded panel and compact per-check/management tooltip. The verbose Full prose was condensed in 3.59 for TradingView's compiled-token limit; calculations, grades and alerts are unchanged.")
-string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean"], group = G_D, tooltip = "Clean is display only: one nearest level and gap per side, one gap containing price, no timing ribbon, HTF candle display, HTF open, T-Spot boxes or NWOG drawing; the status line, D/T/E simple checklist, active preview, confirmed setups, diagnostics if enabled, calculations and alerts remain. Current keeps the 3.54 drawing density; the 3.55 text/count corrections apply in both views.")
+string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean", "MX Lite"], group = G_D, tooltip = "Current retains 3.54 drawing density. Clean and MX Lite use compact auxiliary drawings. MX Lite defaults to the latest confirmed setup; setup tags and trigger zones have separate display switches. All views retain the same calculations, grades, targets, tracking and alerts.")
+bool iSigShow = input.bool(true, "Show setup labels", group = G_D, tooltip = "Display only: Off hides confirmed setup tags. Setup, grade, preview, outcome and alert logic continue; the tracker retains its label ID but does not repopulate a hidden tag.")
+bool iZoneShow = input.bool(true, "Show setup zones / iFVGs", group = G_D, tooltip = "Display only: Off hides the confirmed trigger box and iFVG/CISD marker. HTF FVG context, setup logic, grades, targets and alerts are unchanged.")
+bool iMxRecent = input.bool(true, "Latest setup only (MX Lite)", group = G_D, tooltip = "MX Lite only. Mutes older setup drawings without deleting retained records or tracker IDs. Outcomes/alerts continue; hidden objects remain until normal history pruning.")
 bool cleanView = iView == "Clean"
+bool mxLiteView = iView == "MX Lite"
+bool compactView = cleanView or mxLiteView
 bool iPanel = input.bool(true, "Checklist panel", inline = "pn", group = G_D)
-bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only: shows a confirmed evaluated trigger on this bar, or PREV CLOSE for just the next bar, then the active sweep / preview / wait state. Known blockers only; no raw-gap detector. ELIGIBLE is alert eligibility, not delivery. Off draws no new row.")
+bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only in every view: shows a confirmed evaluated trigger on this bar, or PREV CLOSE for just the next bar, then the active sweep / preview / wait state. Known blockers only; no raw-gap detector. ELIGIBLE is alert eligibility, not delivery. Off draws no new row.")
 string iPos = input.string("Auto", "", options = ["Auto", "Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D, tooltip = "Auto puts the checklist at middle right on 1m–5m charts so it is nearer the live price row, and bottom right on slower charts. Choose a fixed position to restore the 3.56 bottom-right placement or avoid overlap with other indicators. Tables follow chart corners, not price bars.")
 string iSz = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G_D)
 string iTheme = input.string("Auto", "Theme", options = ["Auto", "Dark", "Light"], group = G_D, tooltip = "Auto reads your chart background")
@@ -326,6 +331,7 @@ type Tr
     bool rule = false
     bool hitC = false
     bool hitE = false
+    bool tagVisible = true
     float bank = 0.0
     float mfe = 0.0
     float mae = 0.0
@@ -900,6 +906,20 @@ f_stFade(St st, bool hide) =>
                 label.set_text(lab, "")
     true
 
+// MX Lite recent-only display: mute older drawings without deleting IDs used by the tracker.
+f_stHide(St st) =>
+    f_stFade(st, true)
+    if not na(st.lb)
+        label.set_tooltip(st.lb, "")
+    for lab in st.tl
+        if not na(lab)
+            label.set_tooltip(lab, "")
+    if not na(st.tc)
+        for lab in st.tc
+            if not na(lab)
+                label.set_tooltip(lab, "")
+    true
+
 f_hcAdd(int d, float level, string tf, int confirmedT) =>
     if not na(level) and not na(confirmedT)
         bool dup = false
@@ -924,8 +944,10 @@ f_hcAdd(int d, float level, string tf, int confirmedT) =>
     true
 
 f_stDel(St st) =>
-    st.lb.delete()
-    st.bx.delete()
+    if not na(st.lb)
+        st.lb.delete()
+    if not na(st.bx)
+        st.bx.delete()
     for l in st.ln
         l.delete()
     for l in st.tl
@@ -1050,7 +1072,7 @@ f_fsmt(bool bull, int b, string tf) =>
         r := a.includes(b) or a.includes(b - 1) or a.includes(b + 1) ? 1 : 0
     r
 
-// auto outcome: close a tracked setup and write the result on its label
+// auto outcome: close a tracked setup and write the result on its label only while that tag is visible
 f_trkEnd(Tr t, float rr, string ex) =>
     t.done := true
     if t.rule
@@ -1063,8 +1085,9 @@ f_trkEnd(Tr t, float rr, string ex) =>
     ot += "\nMFE " + str.tostring(t.mfe, "#.##") + "R · MAE " + str.tostring(t.mae, "#.##") + "R"
     ot += "\nwick CE stop hit before TP1: " + (na(t.slC) ? "-" : t.hitC ? "Yes" : "No") + " · edge stop hit before TP1: " + (na(t.slE) ? "-" : t.hitE ? "Yes" : "No")
     ot += "\nexit " + str.format_time(time, "dd MMM HH:mm", NY)
-    t.lb.set_text(t.txt + " → " + (rr >= 0 ? "+" : "") + str.tostring(rr, "#.#") + "R")
-    t.lb.set_tooltip(t.tip + ot)
+    if t.tagVisible
+        t.lb.set_text(t.txt + " → " + (rr >= 0 ? "+" : "") + str.tostring(rr, "#.#") + "R")
+        t.lb.set_tooltip(t.tip + ot)
     true
 
 f_trk(Tr t) =>
@@ -1558,7 +1581,8 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         st.stopPx := sl
         st.dir := d
         st.madeB := bar_index
-        st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, 85))
+        if iZoneShow
+            st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, 85))
         // iFVG tag with hover info
         int gOff = math.min(bar_index - g.b, 989)
         float gMid = (g.top + g.bot) / 2
@@ -1572,10 +1596,10 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         gTip += "\n" + str.tostring(bar_index - s.extB) + " candles from the extreme (V-shape max " + str.tostring(iVMax) + ")"
         gTip += "\ntrigger body " + str.tostring(body, "#.##") + " pts · " + (disp ? "displacement ✔" : "no displacement ✖")
         gTip += cd ? "" : jud ? "\n\nhighest TF not required (Judas)" : "\n\n" + f_ck(hiOk) + "highest TF iFVG in the leg" + pdTxt
-        st.tl.push(label.new(g.t0, gMid, cd ? "CISD" : g.tf + " iFVG", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(c, 100), textcolor = c, size = size.tiny, tooltip = gTip, text_font_family = font.family_monospace))
+        st.tl.push(label.new(g.t0, gMid, iZoneShow ? (cd ? "CISD" : g.tf + " iFVG") : "", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(c, 100), textcolor = iZoneShow ? c : color.new(c, 100), size = size.tiny, tooltip = iZoneShow ? gTip : "", text_font_family = font.family_monospace))
         string lbTxt = (isL ? "▲ " : "▼ ") + gT + " " + str.tostring(conf) + "/4 " + mdl + (rBad or scBad ? "✖" : "") + (cd ? " CISD" : "") + (jud ? " J" : "") + (inNews ? " NEWS" : "")
         bool pill = iLbl == "Pills"
-        st.lb := label.new(bar_index, isL ? low : high, lbTxt, xloc = xloc.bar_index, yloc = isL ? yloc.belowbar : yloc.abovebar, style = pill ? (isL ? label.style_label_up : label.style_label_down) : label.style_none, color = pill ? color.new(c, gN >= 2 ? 0 : 35) : color.new(c, 100), textcolor = pill ? f_on(c) : c, size = f_sz(), tooltip = tip, text_font_family = font.family_monospace)
+        st.lb := label.new(bar_index, isL ? low : high, iSigShow ? lbTxt : "", xloc = xloc.bar_index, yloc = isL ? yloc.belowbar : yloc.abovebar, style = pill ? (isL ? label.style_label_up : label.style_label_down) : label.style_none, color = iSigShow ? (pill ? color.new(c, gN >= 2 ? 0 : 35) : color.new(c, 100)) : color.new(c, 100), textcolor = iSigShow ? (pill ? f_on(c) : c) : color.new(c, 100), size = f_sz(), tooltip = iSigShow ? tip : "", text_font_family = font.family_monospace)
         // older setup: keep label and iFVG box, drop its trade lines
         if iTrade == "Last setup" and sts.size() > 0
             St prv = sts.last()
@@ -1606,6 +1630,12 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         if iLrlMk and iTrade != "Off" and lrN > 0
             for i = 0 to lrN - 1
                 st.tc.push(label.new(lrB.get(i), lrP.get(i), "○", xloc = xloc.bar_index, yloc = yloc.price, style = isL ? label.style_label_down : label.style_label_up, color = color.new(c, 100), textcolor = color.new(c, 20), size = size.small, tooltip = "LRL touch " + str.tostring(i + 1) + " · " + f_prc(lrP.get(i))))
+        // MX Lite keeps older records and tracker references, but prevents later outcome text from resurfacing hidden tags.
+        if mxLiteView and iMxRecent and sts.size() > 0
+            for oldTr in trs
+                oldTr.tagVisible := false
+            for oldSt in sts
+                f_stHide(oldSt)
         // auto outcome: a new setup flips any open opposite one (rule 10.7), then is tracked itself
         if iTrack and okWin
             for t in trs
@@ -1623,6 +1653,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
                     ui.nTk += 1
                 Tr nt = Tr.new(d, en, sl, risk, pL, tp2, beP, slC, slE, bar_index, time, st.lb, lbTxt, tip)
                 nt.rule := allowed
+                nt.tagVisible := iSigShow
                 trs.push(nt)
                 while trs.size() > 60
                     trs.shift()
@@ -1695,13 +1726,13 @@ if barstate.isconfirmed and calc
         ui.nLoss := 0
     // T-Spot history: a new HTF candle opens → close the last one (wick dot), open a new box if there is a closure
     if iTsDraw and not na(htT0) and htT0 != htT0[1]
-        if not cleanView and tsCurDir != 0 and not na(tsWk)
+        if not compactView and tsCurDir != 0 and not na(tsWk)
             bool hit = tsWk <= tsCurTop and tsWk >= tsCurBot
             color dc0 = tsCurDir == 1 ? iLong : iShort
             tsDot.push(label.new(tsWkT, tsWk, hit ? "●" : "○", xloc = xloc.bar_time, yloc = yloc.price, style = tsCurDir == 1 ? label.style_label_down : label.style_label_up, color = color.new(dc0, 100), textcolor = hit ? dc0 : cMu, size = size.small, tooltip = hit ? "the " + ttNm + " wick formed inside its T-Spot" : "the " + ttNm + " wick formed outside its T-Spot"))
         bool wasC2 = math.abs(clV) == 2
         // the candle that was meant to expand closed the other way: that sequence failed
-        if not cleanView and tsCurDir != 0 and tsDir == -tsCurDir and tsBx.size() > 0
+        if not compactView and tsCurDir != 0 and tsDir == -tsCurDir and tsBx.size() > 0
             box fb = tsBx.last()
             fb.set_text(tsTxt + " · failed")
             fb.set_bgcolor(color.new(cNeu, 92))
@@ -1714,7 +1745,7 @@ if barstate.isconfirmed and calc
         tsCurBot := tsBot
         tsWk := na
         tsWkT := na
-        if not cleanView and tsDir != 0 and not na(tsTop)
+        if not compactView and tsDir != 0 and not na(tsTop)
             color tsc0 = tsDir == 1 ? iLong : iShort
             tsTxt := (tsDir == 1 ? "▲ C" : "▼ C") + str.tostring(tsSeq) + " T-Spot"
             tsBx.push(box.new(htT0, tsTop, htT0 + ttSec * 1000, tsBot, xloc = xloc.bar_time, border_color = color.new(tsc0, 50), border_style = line.style_dashed, bgcolor = color.new(tsc0, 88), text = tsTxt, text_size = size.small, text_color = tsc0, text_halign = text.align_right, text_valign = tsDir == 1 ? text.align_top : text.align_bottom))
@@ -2069,7 +2100,7 @@ f_left(string sess) =>
     int(math.max(0, (endT - nowT) / 60000))
 int minLeft = inAs ? f_left(sAs) : inLo ? f_left(sLo) : inAm ? f_left(sNyRule) : na
 color ribC = inNews ? color.new(cBad, 10) : inJudas ? color.new(#9C27B0, 35) : inMacro ? color.new(cWarn, 35) : inWin ? color.new(cOk, 75) : na
-plotshape(iRib and not cleanView and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
+plotshape(iRib and not compactView and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
 var table mt = table.new(position.top_center, 2, 1, border_width = 2)
 var table diagTb = iDiag ? table.new(position.bottom_left, 1, 1) : na
 var array<line> pLn = array.new<line>()
@@ -2161,7 +2192,7 @@ if barstate.islast
     if iLvShow and lvs.size() > 0
         array<int> used = array.new<int>()
         array<float> dPx = array.new<float>()
-        int otherLimit = cleanView ? 1 : iLvN
+        int otherLimit = compactView ? 1 : iLvN
         for side = 0 to 1
             int otherDrawn = 0
             int tries = 0
@@ -2205,12 +2236,12 @@ if barstate.islast
                         dPx.push(v.px)
                         if not corePass
                             otherDrawn += 1
-    if iTtLines and not cleanView and not na(htO)
+    if iTtLines and not compactView and not na(htO)
         string tsz = iTtSz == "Tiny" ? size.tiny : iTtSz == "Normal" ? size.normal : size.small
         dLn.push(line.new(bar_index - 15, htO, bar_index + 10, htO, color = color.new(lc, 10)))
         dLb.push(label.new(bar_index + 10, htO, ttNm + " OPEN", style = label.style_label_left, color = color.new(lc, 100), textcolor = lc, size = tsz, text_font_family = font.family_monospace))
     // HTF candles on the right (TTrades view): 3 closed + the one forming, at real prices, tagged C2 → C3 → C4
-    if iTtView and not cleanView and not na(c2o) and not na(htT0)
+    if iTtView and not compactView and not na(c2o) and not na(htT0)
         float fh = high
         float fl = low
         int kk = 0
@@ -2298,7 +2329,7 @@ if barstate.islast
             dLn.push(line.new(xe, eqv, xe + step + w - 1, eqv, color = cTx, style = line.style_dashed, width = 1))
             dLb.push(label.new(xe + step + w, eqv, "EQ", style = label.style_label_left, color = color.new(cTx, 100), textcolor = cTx, size = tSz, text_font_family = font.family_monospace))
         dLb.push(label.new(x0 + step, top + pad, ttNm + " candles", style = label.style_label_down, color = color.new(cTx, 100), textcolor = cTx, size = tSz, text_font_family = font.family_monospace))
-    if iNwog and not cleanView and not na(nwT) and not na(nwT0) and iNwSt != "Hidden"
+    if iNwog and not compactView and not na(nwT) and not na(nwT0) and iNwSt != "Hidden"
         float nwC = (nwT + nwB) / 2
         if iNwSt == "Full box"
             int xE = time + 15 * cs * 1000
@@ -2320,12 +2351,12 @@ if barstate.islast
             for pass = 0 to 1
                 for i = 0 to zs.size() - 1
                     Zn z = zs.get(i)
-                    if nIn < (cleanView ? 1 : 2) and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
+                    if nIn < (compactView ? 1 : 2) and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
                         zUsed.push(i)
                         nIn += 1
         // then the nearest ones above and below
         for side = 0 to 1
-            for pass = 1 to (cleanView ? 1 : iZN)
+            for pass = 1 to (compactView ? 1 : iZN)
                 int best = -1
                 float bd = na
                 for i = 0 to zs.size() - 1
