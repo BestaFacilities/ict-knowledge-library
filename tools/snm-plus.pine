@@ -1,5 +1,6 @@
 //@version=6
-// SNM+ 3.60 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// SNM+ 3.61 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.61 keeps swept-level segments through their sweep and prioritizes enabled session + prior-day levels in the display.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -22,7 +23,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.60", shorttitle = "SNM+ 3.60", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.61", shorttitle = "SNM+ 3.61", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -84,7 +85,10 @@ int iLrlLook = input.int(180, "LRL touches: look back (min)", minval = 30, maxva
 bool iLrlMk = input.bool(true, "Mark the LRL touches (last setup)", group = G_L)
 float iEqTol = input.float(0, "Equal highs/lows tolerance (pts)", minval = 0, step = 0.25, group = G_L, tooltip = "0 = auto: 3 pts NQ / MNQ, 0.75 ES / MES")
 bool iLvShow = input.bool(true, "Draw the nearest levels", inline = "lv", group = G_L)
-int iLvN = input.int(2, "per side", minval = 1, maxval = 6, inline = "lv", group = G_L)
+int iLvN = input.int(2, "other / side", minval = 0, maxval = 6, inline = "lv", group = G_L, tooltip = "Nearest additional non-priority levels per side. With session + PDH/PDL priority on, this count is in addition to those enabled core levels. Clean uses one additional level per side.")
+bool iLvCore = input.bool(true, "Always show sessions + PDH/PDL", group = G_L, tooltip = "When on, every enabled, untaken completed-session Asia/London/Premarket/NY AM high/low and PDH/PDL is shown beyond the per-side count. The count adds nearby secondary levels. Clean keeps these plus one additional level per side. Off makes the count apply to all levels. Existing individual session and Previous day H/L switches still apply.")
+bool iLvSwept = input.bool(true, "Keep swept levels to their sweep", group = G_L, tooltip = "Display only: keep a muted line from the level's chart anchor through the bar that swept it, then stop. The consumed level is still removed from active sweep/target logic. Off restores removal from the display.")
+int iLvHist = input.int(20, "Swept levels kept", minval = 1, maxval = 60, group = G_L, tooltip = "Maximum historical segments; completed-session and PDH/PDL hits are retained ahead of secondary swings. Lower this to reduce chart objects.")
 
 string iWin = input.string("2000-0000,0200-0500,0930-1100", "Trading windows (NY)", group = G_C)
 string iOut = input.string("Dim", "Setups outside the windows", options = ["Dim", "Hide"], group = G_C)
@@ -221,6 +225,17 @@ type Lv
     float op
     bool oTk = false
     bool hrl = false
+
+type LvHit
+    float px
+    bool hi
+    string nm
+    int x1
+    int sweepB
+    int sweepT
+    bool core
+    line ln
+    label lb
 
 type Zn
     int dir
@@ -560,6 +575,7 @@ int minG = iMinG == "A++" ? 3 : iMinG == "A+" ? 2 : iMinG == "A" ? 1 : 0
 
 // ───────── state
 var array<Lv> lvs = array.new<Lv>()
+var array<LvHit> lvHits = array.new<LvHit>()
 var array<Zn> zs = array.new<Zn>()
 var array<Gp> gps = array.new<Gp>()
 var array<St> sts = array.new<St>()
@@ -620,6 +636,9 @@ f_ck(bool b) =>
 f_gT(int g) =>
     g == 3 ? "A++" : g == 2 ? "A+" : g == 1 ? "A" : "B"
 
+f_isCoreLevel(string nm) =>
+    nm == "PDH" or nm == "PDL" or str.startswith(nm, "ASIA.") or str.startswith(nm, "LON.") or str.startswith(nm, "PRE.") or str.startswith(nm, "AM.")
+
 // a bar that took liquidity: the high / low it leaves is HRL (protected)
 f_mark(bool hi) =>
     array<int> a = hi ? hiSwB : loSwB
@@ -647,6 +666,45 @@ f_addLv(float px, bool hi, string nm, int b, float op, bool uniq, bool noH = fal
                     if lvs.get(i).nm == nm
                         lvs.remove(i)
                         break
+    true
+
+// Keep a separate display-only record: taken levels must stay removed from the live-liquidity registry.
+f_lvHitAdd(Lv v) =>
+    if iLvSwept and iLvShow
+        int sourceB = v.b >= 0 ? v.b : math.max(0, bar_index - 60)
+        int x1 = math.max(sourceB, math.max(0, bar_index - 9000))
+        bool merged = false
+        if lvHits.size() > 0
+            for i = lvHits.size() - 1 to 0
+                LvHit old = lvHits.get(i)
+                if old.sweepB == bar_index and old.hi == v.hi and math.abs(old.px - v.px) <= eqTol
+                    if not str.contains(old.nm, v.nm)
+                        old.nm := old.nm + " / " + v.nm
+                    old.px := v.hi ? math.max(old.px, v.px) : math.min(old.px, v.px)
+                    old.x1 := math.min(old.x1, x1)
+                    old.core := old.core or f_isCoreLevel(v.nm)
+                    line.set_xy1(old.ln, old.x1, old.px)
+                    line.set_xy2(old.ln, old.sweepB, old.px)
+                    label.set_xy(old.lb, old.sweepB, old.px)
+                    label.set_text(old.lb, old.nm + " · swept")
+                    label.set_tooltip(old.lb, "Swept " + old.nm + " at " + f_prc(old.px) + " · " + str.format_time(old.sweepT, "dd MMM HH:mm", NY))
+                    merged := true
+                    break
+        if not merged
+            line ln = line.new(x1, v.px, bar_index, v.px, color = color.new(cMu, 35), style = line.style_dashed, width = 1)
+            string tip = "Swept " + v.nm + " at " + f_prc(v.px) + " · " + str.format_time(time, "dd MMM HH:mm", NY)
+            label lb = label.new(bar_index, v.px, v.nm + " · swept", style = label.style_label_right, color = color.new(cTx, 100), textcolor = color.new(cMu, 15), size = size.tiny, tooltip = tip, text_font_family = font.family_monospace)
+            lvHits.push(LvHit.new(v.px, v.hi, v.nm, x1, bar_index, time, f_isCoreLevel(v.nm), ln, lb))
+        while lvHits.size() > iLvHist
+            int drop = 0
+            for i = 0 to lvHits.size() - 1
+                if not lvHits.get(i).core
+                    drop := i
+                    break
+            LvHit dropped = lvHits.get(drop)
+            lvHits.remove(drop)
+            line.delete(dropped.ln)
+            label.delete(dropped.lb)
     true
 
 // intraday swing: merges with a nearby swing into EQH / EQL
@@ -1846,6 +1904,7 @@ if barstate.isconfirmed and calc
             if v.b < bar_index
                 if v.hi ? high > v.px : low < v.px
                     f_sweep(v)
+                    f_lvHitAdd(v)
                     lvs.remove(i)
                 else if smtOn and not na(v.op) and not na(oH) and (v.hi ? oH > v.op : oL < v.op)
                     v.oTk := true
@@ -2075,40 +2134,50 @@ if barstate.islast
     if iLvShow and lvs.size() > 0
         array<int> used = array.new<int>()
         array<float> dPx = array.new<float>()
+        int otherLimit = cleanView ? 1 : iLvN
         for side = 0 to 1
-            int drawn = 0
+            int otherDrawn = 0
             int tries = 0
-            while drawn < (cleanView ? 1 : iLvN) and tries < 20
+            bool coreDone = not iLvCore
+            while tries < 80 and (not coreDone or otherDrawn < otherLimit)
                 tries += 1
+                bool corePass = iLvCore and not coreDone
                 int best = -1
                 float bd = na
                 for i = 0 to lvs.size() - 1
                     Lv v = lvs.get(i)
-                    if (v.px > close) == (side == 1) and not used.includes(i)
+                    bool core = f_isCoreLevel(v.nm)
+                    bool wanted = corePass ? core : (not iLvCore or not core)
+                    if (v.px > close) == (side == 1) and not used.includes(i) and wanted
                         float dd = math.abs(v.px - close)
                         if na(bd) or dd < bd
                             bd := dd
                             best := i
                 if best < 0
-                    break
-                used.push(best)
-                Lv v = lvs.get(best)
-                string tx = v.nm + (v.hrl ? " · HRL" : " $$$")
-                // levels within the equal tolerance share one line and one label
-                int mi = -1
-                if dPx.size() > 0
-                    for j = 0 to dPx.size() - 1
-                        if math.abs(dPx.get(j) - v.px) <= eqTol
-                            mi := j
-                if mi >= 0
-                    label lb = dLb.get(mi)
-                    lb.set_text(lb.get_text() + " / " + tx)
+                    if corePass
+                        coreDone := true
+                    else
+                        break
                 else
-                    int x1 = v.b >= 0 ? math.max(v.b, bar_index - 400) : bar_index - 60
-                    dLn.push(line.new(x1, v.px, bar_index + 10, v.px, color = color.new(lc, v.hrl ? 20 : 40), style = v.hrl ? line.style_solid : line.style_dotted))
-                    dLb.push(label.new(bar_index + 10, v.px, tx, style = label.style_label_left, color = color.new(lc, 100), textcolor = color.new(lc, 20), size = size.tiny, text_font_family = font.family_monospace))
-                    dPx.push(v.px)
-                    drawn += 1
+                    used.push(best)
+                    Lv v = lvs.get(best)
+                    string tx = v.nm + (v.hrl ? " · HRL" : " $$$")
+                    // levels within the equal tolerance share one line and one label
+                    int mi = -1
+                    if dPx.size() > 0
+                        for j = 0 to dPx.size() - 1
+                            if math.abs(dPx.get(j) - v.px) <= eqTol
+                                mi := j
+                    if mi >= 0
+                        label lb = dLb.get(mi)
+                        lb.set_text(lb.get_text() + " / " + tx)
+                    else
+                        int x1 = v.b >= 0 ? math.max(v.b, bar_index - 400) : math.max(0, bar_index - 60)
+                        dLn.push(line.new(x1, v.px, bar_index + 10, v.px, color = color.new(lc, v.hrl ? 20 : 40), style = v.hrl ? line.style_solid : line.style_dotted))
+                        dLb.push(label.new(bar_index + 10, v.px, tx, style = label.style_label_left, color = color.new(lc, 100), textcolor = color.new(lc, 20), size = size.tiny, text_font_family = font.family_monospace))
+                        dPx.push(v.px)
+                        if not corePass
+                            otherDrawn += 1
     if iTtLines and not cleanView and not na(htO)
         string tsz = iTtSz == "Tiny" ? size.tiny : iTtSz == "Normal" ? size.normal : size.small
         dLn.push(line.new(bar_index - 15, htO, bar_index + 10, htO, color = color.new(lc, 10)))
