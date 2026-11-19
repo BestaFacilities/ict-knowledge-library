@@ -1,6 +1,6 @@
 //@version=6
-// SNM+ 3.61 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
-// 3.61 keeps swept-level segments through their sweep and prioritizes enabled session + prior-day levels in the display.
+// SNM+ 3.62 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.62 adds configurable NY PM highs/lows to the live liquidity and sweep engine.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -23,7 +23,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.61", shorttitle = "SNM+ 3.61", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.62", shorttitle = "SNM+ 3.62", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -74,6 +74,8 @@ bool iPr = input.bool(true, "Premarket", inline = "p", group = G_L)
 string sPr = input.session("0800-0930", "", inline = "p", group = G_L)
 bool iAm = input.bool(true, "NY AM", inline = "n", group = G_L)
 string sAm = input.session("0930-1100", "", inline = "n", group = G_L)
+bool iNypm = input.bool(true, "NY PM", inline = "np", group = G_L, tooltip = "Track the completed New York afternoon high/low as named liquidity. These levels use the existing sweep, target and setup logic.")
+string sNypm = input.session("1300-1600", "", inline = "np", group = G_L, tooltip = "New York time; default 13:00–16:00. The session range becomes active liquidity after it closes.")
 bool iPD = input.bool(true, "Previous day H/L", inline = "k", group = G_L)
 bool iPW = input.bool(true, "Previous week H/L", inline = "k", group = G_L)
 bool iMon = input.bool(true, "Monday range H/L", inline = "m", group = G_L, tooltip = "Monday's high / low, from Tuesday until swept or replaced next week")
@@ -85,10 +87,10 @@ int iLrlLook = input.int(180, "LRL touches: look back (min)", minval = 30, maxva
 bool iLrlMk = input.bool(true, "Mark the LRL touches (last setup)", group = G_L)
 float iEqTol = input.float(0, "Equal highs/lows tolerance (pts)", minval = 0, step = 0.25, group = G_L, tooltip = "0 = auto: 3 pts NQ / MNQ, 0.75 ES / MES")
 bool iLvShow = input.bool(true, "Draw the nearest levels", inline = "lv", group = G_L)
-int iLvN = input.int(2, "other / side", minval = 0, maxval = 6, inline = "lv", group = G_L, tooltip = "Nearest additional non-priority levels per side. With session + PDH/PDL priority on, this count is in addition to those enabled core levels. Clean uses one additional level per side.")
-bool iLvCore = input.bool(true, "Always show sessions + PDH/PDL", group = G_L, tooltip = "When on, every enabled, untaken completed-session Asia/London/Premarket/NY AM high/low and PDH/PDL is shown beyond the per-side count. The count adds nearby secondary levels. Clean keeps these plus one additional level per side. Off makes the count apply to all levels. Existing individual session and Previous day H/L switches still apply.")
+int iLvN = input.int(2, "other / side", minval = 0, maxval = 6, inline = "lv", group = G_L, tooltip = "Nearest additional non-priority levels per side. With core session + PDH/PDL priority on, this count is in addition to enabled core levels, including NY PM. Clean uses one additional level per side.")
+bool iLvCore = input.bool(true, "Always show sessions + PDH/PDL", group = G_L, tooltip = "When on, every enabled, untaken completed-session Asia/London/Premarket/NY AM/NY PM high/low and PDH/PDL is shown beyond the per-side count. The count adds nearby secondary levels. Clean keeps these plus one additional level per side. Off makes the count apply to all levels. Existing individual session and Previous day H/L switches still apply.")
 bool iLvSwept = input.bool(true, "Keep swept levels to their sweep", group = G_L, tooltip = "Display only: keep a muted line from the level's chart anchor through the bar that swept it, then stop. The consumed level is still removed from active sweep/target logic. Off restores removal from the display.")
-int iLvHist = input.int(20, "Swept levels kept", minval = 1, maxval = 60, group = G_L, tooltip = "Maximum historical segments; completed-session and PDH/PDL hits are retained ahead of secondary swings. Lower this to reduce chart objects.")
+int iLvHist = input.int(20, "Swept levels kept", minval = 1, maxval = 60, group = G_L, tooltip = "Maximum historical segments; completed-session (including NY PM) and PDH/PDL hits are retained ahead of secondary swings. Lower this to reduce chart objects.")
 
 string iWin = input.string("2000-0000,0200-0500,0930-1100", "Trading windows (NY)", group = G_C)
 string iOut = input.string("Dim", "Setups outside the windows", options = ["Dim", "Hide"], group = G_C)
@@ -532,6 +534,7 @@ bool inAs = f_in(sAs)
 bool inLo = f_in(sLo)
 bool inPr = f_in(sPr)
 bool inAm = f_in(sAm)
+bool inNypm = f_in(sNypm)
 bool inWin = f_in(iWin)
 bool inMacro = f_in(iMacro)
 bool inJudas = f_in(iJudas)
@@ -613,13 +616,13 @@ var array<int> lrLb = array.new<int>()
 var float nwT = na
 var float nwB = na
 var int nwT0 = na
-var array<float> sH = array.new<float>(4, na)
-var array<float> sL = array.new<float>(4, na)
-var array<int> sHb = array.new<int>(4, 0)
-var array<int> sLb = array.new<int>(4, 0)
-var array<float> qH = array.new<float>(4, na)
-var array<float> qL = array.new<float>(4, na)
-var array<bool> sWas = array.new<bool>(4, false)
+var array<float> sH = array.new<float>(5, na)
+var array<float> sL = array.new<float>(5, na)
+var array<int> sHb = array.new<int>(5, 0)
+var array<int> sLb = array.new<int>(5, 0)
+var array<float> qH = array.new<float>(5, na)
+var array<float> qL = array.new<float>(5, na)
+var array<bool> sWas = array.new<bool>(5, false)
 var int lastPhB = -1
 var int lastPlB = -1
 
@@ -637,7 +640,7 @@ f_gT(int g) =>
     g == 3 ? "A++" : g == 2 ? "A+" : g == 1 ? "A" : "B"
 
 f_isCoreLevel(string nm) =>
-    nm == "PDH" or nm == "PDL" or str.startswith(nm, "ASIA.") or str.startswith(nm, "LON.") or str.startswith(nm, "PRE.") or str.startswith(nm, "AM.")
+    nm == "PDH" or nm == "PDL" or str.startswith(nm, "ASIA.") or str.startswith(nm, "LON.") or str.startswith(nm, "PRE.") or str.startswith(nm, "AM.") or str.startswith(nm, "NYPM.")
 
 // a bar that took liquidity: the high / low it leaves is HRL (protected)
 f_mark(bool hi) =>
@@ -1765,9 +1768,9 @@ if barstate.isconfirmed and calc
             f_addSw(pl5, false, bar_index - 5, oL[5])
 
     // sessions: their high / low becomes a level when the session ends
-    array<bool> inS = array.from(iAs and inAs, iLo and inLo, iPr and inPr, iAm and inAm)
-    array<string> sNm = array.from("ASIA", "LON", "PRE", "AM")
-    for s = 0 to 3
+    array<bool> inS = array.from(iAs and inAs, iLo and inLo, iPr and inPr, iAm and inAm, iNypm and inNypm)
+    array<string> sNm = array.from("ASIA", "LON", "PRE", "AM", "NYPM")
+    for s = 0 to 4
         bool cur = inS.get(s)
         bool was = sWas.get(s)
         if cur and not was
