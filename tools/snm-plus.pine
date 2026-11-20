@@ -1,6 +1,6 @@
 //@version=6
-// SNM+ 3.69 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
-// 3.69 simplifies further: removes diagnostics, HTF CISD context, NWOG, Monday range, Judas, and 5M HTF gap zones. 3.68 removed TTrades and Clean/MX Lite views; 3.67 added opt-in SMT divergence markers.
+// SNM+ 3.70 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.70 adds SMT labels at sweeps (display-only). 3.69 removed diagnostics, HTF CISD, NWOG, Monday, Judas, and 5M HTF zones. 3.68 removed TTrades and Clean/MX Lite views; 3.67 added opt-in SMT divergence markers.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -21,7 +21,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.69", shorttitle = "SNM+ 3.69", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.70", shorttitle = "SNM+ 3.70", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -104,6 +104,7 @@ bool iZIn = input.bool(true, "Also the gaps price is trading inside", group = G_
 string iMsTf = input.timeframe("15", "Structure timeframe (C / R)", group = G_C, tooltip = "with the structure = C (continuation), against = R (reversal). structure turns bullish on a close above the last swing high, bearish on a close below the last swing low (pivots 2/2)")
 bool iSmtOn = input.bool(true, "SMT with ES / NQ", group = G_C)
 bool iSmtDiv = input.bool(false, "Show SMT divergence markers", group = G_C, tooltip = "Display-only: marks swing points where the chart makes a new high/low but the SMT pair does not (SMT- bearish / SMT+ bullish divergence). Informational only; does not affect setups, grades, targets, or alerts. Requires SMT with ES / NQ on and a valid pair feed.")
+bool iSmtSw = input.bool(true, "Show SMT labels at sweeps", group = G_C, tooltip = "Display-only: at each sweep, SMT ✓ means the pair did not take its own level (divergence); SMT ✗ means the pair took it too. Informational only; does not affect setups, grades, targets, or alerts. Requires SMT with ES / NQ on and a valid pair feed.")
 string iPairMode = input.string("Auto", "SMT sibling", options = ["Auto", "Manual"], group = G_C, tooltip = "Auto keeps SNM+ 3.47's NQ/ES and MNQ/MES pairing. Manual permits another symbol; if the feed has no data, SMT/ES checks will be unavailable, not silently treated as confirmed.")
 string iManualPair = input.symbol("CME_MINI:ES1!", "Manual SMT symbol", group = G_C, tooltip = "Only used when SMT sibling = Manual. For gold, choose the exact correlated feed available on your TradingView account; an invalid feed cannot validate SMT.")
 int iMfiLen = input.int(14, "Volume oscillator length (MFI)", minval = 5, group = G_C)
@@ -474,6 +475,9 @@ var array<Zn> zsE = array.new<Zn>()
 var array<int> esBuB = array.new<int>()
 var array<int> esBeB = array.new<int>()
 var array<label> rjLb = array.new<label>()
+var array<label> smtSwLb = array.new<label>()
+var int smtSwBS = -1
+var int smtSwBL = -1
 // T-Spot history: one box per HTF candle of the sequence, plus the wick dot
 var array<int> pv = array.new<int>()
 var array<int> hiSwB = array.new<int>()
@@ -1613,6 +1617,19 @@ if barstate.isconfirmed and calc
                 if v.hi ? high > v.px : low < v.px
                     f_sweep(v)
                     f_lvHitAdd(v)
+                    if iSmtSw and smtOn and not na(v.op) and (v.hi ? smtSwBS != bar_index : smtSwBL != bar_index)
+                        bool took = v.oTk or (v.hi ? (not na(oH) and oH > v.op) : (not na(oL) and oL < v.op))
+                        float swPx = v.hi ? high : low
+                        string swTx = took ? "SMT ✗" : "SMT ✓"
+                        color swC = took ? cBad : cOk
+                        string swTip = "SMT at sweep: " + pairRoot + (took ? " took its level (no divergence)" : " did not take its level (divergence)") + " · level " + v.nm + " " + f_prc(v.px) + " · pair level " + f_prc(v.op)
+                        smtSwLb.push(label.new(bar_index, swPx, swTx, style = v.hi ? label.style_label_up : label.style_label_down, color = color.new(swC, 0), textcolor = color.white, size = size.tiny, tooltip = swTip, text_font_family = font.family_monospace))
+                        if v.hi
+                            smtSwBS := bar_index
+                        else
+                            smtSwBL := bar_index
+                        while smtSwLb.size() > 30
+                            smtSwLb.shift().delete()
                     lvs.remove(i)
                 else if smtOn and not na(v.op) and not na(oH) and (v.hi ? oH > v.op : oL < v.op)
                     v.oTk := true

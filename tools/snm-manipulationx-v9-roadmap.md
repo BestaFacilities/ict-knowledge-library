@@ -1,8 +1,8 @@
-// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.69).
+// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.70).
 
 # Prioritized ManipulationX V9 → SNM+ roadmap
 
-**Status:** Priority 1 / Stage 1 was implemented as display-only in SNM+ 3.64 and Stage 2 (checklist clarity) in SNM+ 3.65; the Clean/MX Lite views were later removed in 3.68 and the extras (diagnostics, HTF CISD, NWOG, Monday, Judas, 5M HTF zones) in 3.69. The remaining items are recommendations. This roadmap is based on `tools/snm-manipulationx-v9-comparison.md`, the user's 11 screenshots (`image-38.png`–`image-48.png`) and video transcript, and SNM+ 3.63 as the implementation baseline. No V9 code is being ported. Stage 1 does not change setup qualification, C/RB/RV model labels, D/T/E grading, targets, risk management, alerts, session rules, or timeframe behavior.
+**Status:** Priority 1 / Stage 1 was implemented as display-only in SNM+ 3.64 and Stage 2 (checklist clarity) in SNM+ 3.65; the Clean/MX Lite views were later removed in 3.68 and the extras (diagnostics, HTF CISD, NWOG, Monday, Judas, 5M HTF zones) in 3.69; 3.70 adds SMT sweep labels. The remaining items are recommendations. This roadmap is based on `tools/snm-manipulationx-v9-comparison.md`, the user's 11 screenshots (`image-38.png`–`image-48.png`) and video transcript, and SNM+ 3.63 as the implementation baseline. No V9 code is being ported. Stage 1 does not change setup qualification, C/RB/RV model labels, D/T/E grading, targets, risk management, alerts, session rules, or timeframe behavior.
 
 The screenshots show one saved V9 configuration, not verified factory defaults. In particular, the V9 screenshot and narration disagree about HTF FVG mitigation (50% / wicks versus 100% / close). Treat that donor rule as unresolved. The V9 performance and non-repainting claims are also unverified.
 

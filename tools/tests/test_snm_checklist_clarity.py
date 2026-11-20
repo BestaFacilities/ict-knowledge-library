@@ -77,7 +77,7 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    assert 'indicator("SNM+ 3.69", shorttitle = "SNM+ 3.69"' in new_source
+    assert 'indicator("SNM+ 3.70", shorttitle = "SNM+ 3.70"' in new_source
 
     # Non-display logic is untouched: every helper except f_setup (whose TTFM
     # checklist value changes below) and the setup gate are identical.

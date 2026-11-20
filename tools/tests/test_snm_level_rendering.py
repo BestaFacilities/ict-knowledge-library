@@ -42,7 +42,9 @@ def find_if(tree, header):
 
 def sweep_projection(tree, header=SWEEP_HEADER):
     node = find_if(tree, header)
-    return [dump(node.test)] + [dump(stmt) for stmt in node.body if head(stmt) != "f_lvHitAdd(v)"]
+    # Exclude the display-only history record (f_lvHitAdd) and the 3.70
+    # display-only SMT sweep-label block; the sweep predicate and removal stay.
+    return [dump(node.test)] + [dump(stmt) for stmt in node.body if head(stmt) != "f_lvHitAdd(v)" and not head(stmt).startswith("if iSmtSw")]
 
 
 def replace_once(text, old, new):
@@ -68,7 +70,8 @@ def main():
     old_sweep = find_if(old, SWEEP_HEADER)
     new_sweep = find_if(new, SWEEP_HEADER)
     assert [head(stmt) for stmt in old_sweep.body] == ["f_sweep(v)", "f_lvHitAdd(v)", "lvs.remove(i)"]
-    assert [head(stmt) for stmt in new_sweep.body] == ["f_sweep(v)", "f_lvHitAdd(v)", "lvs.remove(i)"]
+    # 3.70 adds a display-only SMT sweep-label block between the history record and removal.
+    assert [head(stmt) for stmt in new_sweep.body] == ["f_sweep(v)", "f_lvHitAdd(v)", "if iSmtSw and smtOn and not na(v.op) and (v.hi ? smtSwBS != bar_index : smtSwBL != bar_index)", "lvs.remove(i)"]
     assert sweep_projection(old) == sweep_projection(new), "sweep handling changed beyond the history-record call"
 
     # The only active-registry helper change is stable identity for date-prefixed session names.
