@@ -1,8 +1,8 @@
-// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.68).
+// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.69).
 
 # Prioritized ManipulationX V9 → SNM+ roadmap
 
-**Status:** Priority 1 / Stage 1 is implemented as display-only in SNM+ 3.64 and Stage 2 (checklist clarity) in SNM+ 3.65; the remaining items are recommendations. This roadmap is based on `tools/snm-manipulationx-v9-comparison.md`, the user's 11 screenshots (`image-38.png`–`image-48.png`) and video transcript, and SNM+ 3.63 as the implementation baseline. No V9 code is being ported. Stage 1 does not change setup qualification, C/RB/RV model labels, D/T/E grading, targets, risk management, alerts, session rules, or timeframe behavior.
+**Status:** Priority 1 / Stage 1 was implemented as display-only in SNM+ 3.64 and Stage 2 (checklist clarity) in SNM+ 3.65; the Clean/MX Lite views were later removed in 3.68 and the extras (diagnostics, HTF CISD, NWOG, Monday, Judas, 5M HTF zones) in 3.69. The remaining items are recommendations. This roadmap is based on `tools/snm-manipulationx-v9-comparison.md`, the user's 11 screenshots (`image-38.png`–`image-48.png`) and video transcript, and SNM+ 3.63 as the implementation baseline. No V9 code is being ported. Stage 1 does not change setup qualification, C/RB/RV model labels, D/T/E grading, targets, risk management, alerts, session rules, or timeframe behavior.
 
 The screenshots show one saved V9 configuration, not verified factory defaults. In particular, the V9 screenshot and narration disagree about HTF FVG mitigation (50% / wicks versus 100% / close). Treat that donor rule as unresolved. The V9 performance and non-repainting claims are also unverified.
 
@@ -67,4 +67,4 @@ For the implemented 3.64 view and any later display-only work:
 4. Run local Pine lint/parser/AST checks, then compile and inspect the rendered chart in TradingView. Local checks do not verify TradingView's compiler token budget, replay rendering, or alert delivery. Any new event alerts need forward-bar/alert-log checks separately.
 5. Compare across the user's relevant pairs and timeframes without requiring manual retuning when switching chart TF. Keep pair-specific risk guidance and Auto/Fixed context documented in `tools/snm-settings-by-pair.md`.
 
-**Decision:** Stage 1's display simplification is implemented in 3.64 and Stage 2's checklist clarity in 3.65; new candle-range levels and standalone alert categories remain separate proposals. No SNM+ model semantics were changed.
+**Decision:** Stage 1's display simplification was implemented in 3.64 and Stage 2's checklist clarity in 3.65; the views were removed in 3.68 and the extras in 3.69. New candle-range levels and standalone alert categories remain separate proposals. No SNM+ model semantics were changed by the display passes.

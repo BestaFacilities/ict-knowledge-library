@@ -57,9 +57,14 @@ def main():
     new = parse(new_source)
 
     # No sweep, target, edge, swing or swept-history logic changed. f_preview is
-    # excluded: 3.68 removed the TTrades (TTFM) tooltip text from it.
-    for name in ("f_sweep", "f_draw", "f_edge", "f_addSw", "f_lvHitAdd"):
+    # excluded: 3.68 removed the TTrades (TTFM) tooltip text from it. f_sweep,
+    # f_draw and f_edge are excluded: 3.69 removed Judas (s.jx), NWOG draws and
+    # 5M HTF gap zones from them. f_addSw and f_lvHitAdd remain byte-identical.
+    for name in ("f_addSw", "f_lvHitAdd"):
         assert dump(function(old, name)) == dump(function(new, name)), f"active/display helper changed: {name}"
+    # 3.69 extras are gone from the sweep/target path.
+    for gone in ("iNwog", "iMon", "MON.H", "iJudas", "inJudas", "s.jx", "f_zAdd5", "f_zSponsor", "iZ5"):
+        assert gone not in new_source, f"removed extra still present: {gone}"
     old_sweep = find_if(old, SWEEP_HEADER)
     new_sweep = find_if(new, SWEEP_HEADER)
     assert [head(stmt) for stmt in old_sweep.body] == ["f_sweep(v)", "f_lvHitAdd(v)", "lvs.remove(i)"]

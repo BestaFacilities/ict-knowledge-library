@@ -46,7 +46,7 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    assert 'indicator("SNM+ 3.68", shorttitle = "SNM+ 3.68"' in new_source
+    assert 'indicator("SNM+ 3.69", shorttitle = "SNM+ 3.69"' in new_source
 
     # The opt-in input exists and defaults Off (display-only, opt-in).
     assert 'bool iSmtDiv = input.bool(false, "Show SMT divergence markers"' in new_source

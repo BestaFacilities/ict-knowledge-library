@@ -77,12 +77,14 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    assert 'indicator("SNM+ 3.68", shorttitle = "SNM+ 3.68"' in new_source
+    assert 'indicator("SNM+ 3.69", shorttitle = "SNM+ 3.69"' in new_source
 
     # Non-display logic is untouched: every helper except f_setup (whose TTFM
     # checklist value changes below) and the setup gate are identical.
     # f_preview excluded: 3.68 removed the TTrades (TTFM) tooltip from it.
-    for name in ("f_ck", "f_gT", "f_trkEnd", "f_sweep", "f_draw", "f_edge"):
+    # f_sweep/f_draw/f_edge excluded: 3.69 removed Judas, NWOG draws and 5M
+    # HTF gap zones from them.
+    for name in ("f_ck", "f_gT", "f_trkEnd"):
         assert dump(function(old, name)) == dump(function(new, name)), f"helper changed: {name}"
     old_gate = next(node for node in setup_body(old) if head(node).startswith("bool show ="))
     new_gate = next(node for node in setup_body(new) if head(node).startswith("bool show ="))
