@@ -118,7 +118,7 @@ def main():
 
     # Core session + prior-day levels stay additive to the selected per-side secondary count.
     assert 'bool iLvCore = input.bool(true, "Always show sessions + PDH/PDL"' in new_source
-    assert 'int iLvN = input.int(2, "other / side", minval = 0' in new_source
+    assert 'int iLvN = input.int(2, "", minval = 0' in new_source  # CW10026: inline inputs after the first carry no title
     levels = find_if(new, LEVEL_HEADER)
     level_text = unparse(levels)
     assert "bool coreDone = not iLvCore" in level_text
