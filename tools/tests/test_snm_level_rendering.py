@@ -56,8 +56,9 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    # No sweep, target, edge, swing, preview or swept-history logic changed.
-    for name in ("f_sweep", "f_draw", "f_edge", "f_addSw", "f_preview", "f_lvHitAdd"):
+    # No sweep, target, edge, swing or swept-history logic changed. f_preview is
+    # excluded: 3.68 removed the TTrades (TTFM) tooltip text from it.
+    for name in ("f_sweep", "f_draw", "f_edge", "f_addSw", "f_lvHitAdd"):
         assert dump(function(old, name)) == dump(function(new, name)), f"active/display helper changed: {name}"
     old_sweep = find_if(old, SWEEP_HEADER)
     new_sweep = find_if(new, SWEEP_HEADER)
@@ -124,7 +125,7 @@ def main():
     assert "bool coreDone = not iLvCore" in level_text
     assert "bool corePass = iLvCore and not coreDone" in level_text
     assert "bool wanted = corePass ? core : not iLvCore or not core" in level_text
-    assert "int otherLimit = compactView ? 1 : iLvN" in level_text
+    assert "int otherLimit = iLvN" in level_text  # 3.68: views removed, always Current density
 
     # Taken levels are capped display records and their line terminates at the sweep bar.
     assert 'bool iLvSwept = input.bool(true, "Keep swept levels to their sweep"' in new_source

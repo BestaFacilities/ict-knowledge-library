@@ -77,11 +77,12 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    assert 'indicator("SNM+ 3.67", shorttitle = "SNM+ 3.67"' in new_source
+    assert 'indicator("SNM+ 3.68", shorttitle = "SNM+ 3.68"' in new_source
 
     # Non-display logic is untouched: every helper except f_setup (whose TTFM
     # checklist value changes below) and the setup gate are identical.
-    for name in ("f_preview", "f_ck", "f_gT", "f_trkEnd", "f_sweep", "f_draw", "f_edge"):
+    # f_preview excluded: 3.68 removed the TTrades (TTFM) tooltip from it.
+    for name in ("f_ck", "f_gT", "f_trkEnd", "f_sweep", "f_draw", "f_edge"):
         assert dump(function(old, name)) == dump(function(new, name)), f"helper changed: {name}"
     old_gate = next(node for node in setup_body(old) if head(node).startswith("bool show ="))
     new_gate = next(node for node in setup_body(new) if head(node).startswith("bool show ="))
@@ -91,21 +92,21 @@ def main():
     # 3 (not assessed) instead of 0 (fail). Everything else is byte-identical.
     old_pv = [node for node in shown_setup(old) if head(node).startswith("pv.push(")]
     new_pv = [node for node in shown_setup(new) if head(node).startswith("pv.push(")]
-    assert len(old_pv) == len(new_pv) == 8
-    for o, n in zip(old_pv, new_pv):
-        if "ttOk" in head(o):
-            assert 'iTtF == "Off" ? 3 : ttOk ? 1 : 0' in unparse(n), "TTFM Off must be not-assessed (3)"
-        else:
-            assert dump(o) == dump(n), f"checklist value changed: {head(o)}"
-    assert 'pv.push(iTtF == "Off" ? 3 : ttOk ? 1 : 0)' in new_source
+    assert len(old_pv) == 8 and len(new_pv) == 7  # 3.68 removed the TTFM pv.push
+    # 3.68 removed the TTFM pv.push (old index 4); the other 7 values are unchanged.
+    old_pv_no_ttfm = [o for o in old_pv if "ttOk" not in head(o)]
+    assert len(old_pv_no_ttfm) == 7
+    for o, n in zip(old_pv_no_ttfm, new_pv):
+        assert dump(o) == dump(n), f"checklist value changed: {head(o)}"
+    assert 'pv.push(iTtF == "Off" ? 3 : ttOk ? 1 : 0)' not in new_source  # TTFM removed
     # SMT Off already reported 2 (not applicable) and stays that way.
     assert 'pv.push(smtOn ? (smtP ? 1 : 0) : 2)' in new_source
 
     # Panel: 2 x 21 table, LAST SETUP header, NOW rows, explicit states.
     assert "var table tb = table.new(position.bottom_right, 2, 21, border_width = 0)" in new_source
     assert "tb.clear(0, 0, 1, 20)" in new_source
-    simple = panel_block(new, 'if barstate.islast and iPanel and (iDet == "Simple" or cleanView)')
-    full = panel_block(new, 'if barstate.islast and iPanel and iDet == "Full" and not cleanView')
+    simple = panel_block(new, 'if barstate.islast and iPanel and iDet == "Simple"')
+    full = panel_block(new, 'if barstate.islast and iPanel and iDet == "Full"')
     for block in (simple, full):
         rows = cell_rows(block)
         texts = [t for _, _, t in rows]
@@ -128,9 +129,9 @@ def main():
 
     # Positive controls: dropping the n/a state or the LAST SETUP header must fail.
     no_na = parse(new_source.replace('v == 3 ? "n/a" : ', "", 1))
-    assert 'v == 3 ? "n/a"' not in unparse(panel_block(no_na, 'if barstate.islast and iPanel and iDet == "Full" and not cleanView'))
+    assert 'v == 3 ? "n/a"' not in unparse(panel_block(no_na, 'if barstate.islast and iPanel and iDet == "Full"'))
     no_header = parse(new_source.replace('"LAST SETUP"', '"LAST"'))
-    assert not any('"LAST SETUP"' in t for _, _, t in cell_rows(panel_block(no_header, 'if barstate.islast and iPanel and iDet == "Full" and not cleanView')))
+    assert not any('"LAST SETUP"' in t for _, _, t in cell_rows(panel_block(no_header, 'if barstate.islast and iPanel and iDet == "Full"')))
     # ... and the LAST SETUP header must sit directly under the SNM+ header row.
     full_rows = cell_rows(full)
     assert max(r for r, _, t in full_rows if '"LAST SETUP"' in t) == 1

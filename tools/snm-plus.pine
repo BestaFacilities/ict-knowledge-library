@@ -1,6 +1,6 @@
 //@version=6
-// SNM+ 3.67 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
-// 3.67 adds opt-in SMT divergence markers (display-only); 3.66 fixes the 3.65 compile errors and CW10026 inline-input titles.
+// SNM+ 3.68 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.68 simplifies: removes TTrades Fractal Model and Clean/MX Lite views (Current only); 3.67 adds opt-in SMT divergence markers.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -23,7 +23,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.67", shorttitle = "SNM+ 3.67", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.68", shorttitle = "SNM+ 3.68", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -53,7 +53,6 @@ int iVMax = input.int(6, "V-shape limit (candles)", minval = 2, maxval = 15, gro
 float iDispAtr = input.float(0.8, "Displacement: body at least (x ATR)", minval = 0.1, step = 0.1, group = G_S)
 float iClrAtr = input.float(0.25, "Displacement: close beyond the trigger at least (x ATR)", minval = 0, step = 0.05, group = G_S, tooltip = "rulebook 6: the trigger candle closes CLEARLY through the FVG or the CISD level. a big body that closes 0.5 pt beyond the level is not displacement")
 bool iHard = input.bool(true, "Rulebook blocks set the grade to B", group = G_S, tooltip = "a reversal (RB / RV) or a Sweep + CISD outside NY AM is not allowed by the rulebook: it is graded B instead of only flagged")
-string iTtF = input.string("Grade", "TTFM filter (HTF candle closure)", options = ["Off", "Grade", "Strict"], group = G_S, tooltip = "TTrades Fractal Model: the last closed HTF candle (15m on a 1m chart) must show a C2 or C3 closure in the setup's direction. Off: information only. Grade: without it, one grade lower (A+ → A, A → B). Strict: without it, B (hidden). applies to ARMED and confirmed setups")
 bool iSmtR = input.bool(true, "Reversal without SMT: one grade lower", group = G_S, tooltip = "rulebook 5 / 6.3: SMT with ES is required for a reversal. A+ becomes A, A becomes B")
 float iGapMin = input.float(0.1, "Min iFVG size (x ATR)", minval = 0, step = 0.05, group = G_S)
 bool iT2 = input.bool(true, "iFVG on 2m", inline = "t", group = G_S)
@@ -119,7 +118,6 @@ bool iSmtOn = input.bool(true, "SMT with ES / NQ", group = G_C)
 bool iSmtDiv = input.bool(false, "Show SMT divergence markers", group = G_C, tooltip = "Display-only: marks swing points where the chart makes a new high/low but the SMT pair does not (SMT- bearish / SMT+ bullish divergence). Informational only; does not affect setups, grades, targets, or alerts. Requires SMT with ES / NQ on and a valid pair feed.")
 string iPairMode = input.string("Auto", "SMT sibling", options = ["Auto", "Manual"], group = G_C, tooltip = "Auto keeps SNM+ 3.47's NQ/ES and MNQ/MES pairing. Manual permits another symbol; if the feed has no data, SMT/ES checks will be unavailable, not silently treated as confirmed.")
 string iManualPair = input.symbol("CME_MINI:ES1!", "Manual SMT symbol", group = G_C, tooltip = "Only used when SMT sibling = Manual. For gold, choose the exact correlated feed available on your TradingView account; an invalid feed cannot validate SMT.")
-string iTtSel = input.string("Auto", "Fractal pairing (HTF candle)", options = ["Auto", "15", "30", "60", "240"], group = G_C, tooltip = "TTrades Fractal Model: the higher timeframe candle your entry chart trades inside. Auto: 1m → 15m, 3m → 30m, 5m → 1H, 15m → 4H. used for the C2 / C3 closure check, PSP, entry timing and time exits")
 const string G_HC = "HTF CISD confluence"
 bool iHCOn = input.bool(false, "Enable confirmed HTF CISD context", group = G_HC, tooltip = "Information only; never creates a setup, changes the four-point confluence score, grade, targets, bias, or alerts. Uses the previous closed HTF candle only. Default off preserves 3.49 tags.")
 bool iHCDraw = input.bool(true, "Draw confirmed HTF CISD lines", group = G_HC, tooltip = "Only used when context is enabled; the line is dotted, never a provisional live-candle level. Off keeps the tooltip context without extra drawings.")
@@ -128,25 +126,6 @@ string iHCTF1 = input.timeframe("2", "Manual HTF 1", group = G_HC)
 string iHCTF2 = input.timeframe("3", "Manual HTF 2", group = G_HC)
 int iHCFresh = input.int(60, "Context valid for (minutes)", minval = 5, maxval = 240, group = G_HC, tooltip = "Freshness from the confirmed HTF candle's actual close, including across market gaps. Applies to tooltip context and current line extension.")
 int iHCKeep = input.int(4, "Confirmed lines kept total", minval = 1, maxval = 12, group = G_HC, tooltip = "Global cap across both timeframes and directions; old labels and lines are deleted when this cap is reached.")
-const string G_T = "HTF candles (TTrades view)"
-bool iTtView = input.bool(true, "Show the HTF candles on the right", group = G_T, tooltip = "the last 3 closed HTF candles + the one forming, at real prices, to the right of the chart. the pairing (15m on 1m…) is set in Confluence")
-string iTtLayout = input.string("Auto (compact)", "HTF candle spacing", options = ["Auto (compact)", "Manual (3.56)"], group = G_T, tooltip = "Auto keeps the four-candle strip near the last bar and narrows it on higher chart timeframes. Manual restores the 3.56 Start / width / gap inputs below. Drawing only: closure, T-Spot, grade, alerts and timeframe pairing are unchanged. Pine cannot change chart zoom or TradingView's right margin.")
-int iTtX = input.int(50, "Manual start (bars right)", minval = 20, maxval = 300, group = G_T)
-int iTtW = input.int(5, "Manual width (bars, odd)", minval = 3, maxval = 21, step = 2, inline = "tw", group = G_T)
-int iTtGap = input.int(3, "", minval = 1, maxval = 10, inline = "tw", group = G_T)
-bool iTtForm = input.bool(true, "Show the candle forming", group = G_T)
-color iTtBull = input.color(#26A69A, "Bull", inline = "tc", group = G_T)
-color iTtBear = input.color(#5D606B, "", inline = "tc", group = G_T)
-color iTtWick = input.color(#787B86, "", inline = "tc", group = G_T)
-string iTtSz = input.string("Small", "Text size", options = ["Tiny", "Small", "Normal"], group = G_T)
-bool iTtTime = input.bool(true, "Open times", inline = "td", group = G_T)
-bool iTtTag = input.bool(true, "", inline = "td", group = G_T)
-bool iTtSwp = input.bool(true, "Swept level", inline = "te", group = G_T)
-bool iTtEq = input.bool(true, "", inline = "te", group = G_T)
-bool iTtPspT = input.bool(true, "", inline = "te", group = G_T)
-bool iTsDraw = input.bool(false, "Draw T-Spots on the chart", group = G_C, tooltip = "off by default: the T-Spot is still checked on every setup (wick inside / outside). turn on to study a day the TTrades way: one box per HTF candle of the sequence, with a dot where its wick formed")
-int iTsN = input.int(3, "T-Spots kept (sequence)", minval = 1, maxval = 8, group = G_C, tooltip = "like the TTrades indicator: each HTF candle of the sequence keeps its T-Spot (C3, C4, …), with a dot where its wick formed (filled = inside the T-Spot)")
-bool iTtLines = input.bool(true, "Show the HTF candle open", group = G_C, tooltip = "the open of the current HTF candle (short line), and the T-Spot: after a bullish (bearish) C2 / C3 closure, the upper (lower) half of that candle, from its high (low) to its 50%. TTrades: during an expansion the next HTF candle's wick should form there; look for a PD array inside it. if there is no closure, the 50% line is shown instead")
 int iMfiLen = input.int(14, "Volume oscillator length (MFI)", minval = 5, group = G_C)
 
 float iRiskP = input.float(200, "Risk A++ / A+ ($)", minval = 0, group = G_R)
@@ -175,13 +154,6 @@ string iTrade = input.string("Last setup", "Entry / stop / target lines", option
 int iDays = input.int(5, "History to calculate (days)", minval = 1, maxval = 60, group = G_D, tooltip = "SNM+ only runs its engine on the last N days before the last candle (in replay: before the replay candle). 5 days loads fast and is enough for every level and gap a session needs. raise it only if you want older setups drawn")
 int iKeep = input.int(3, "Setups kept on the chart", minval = 1, maxval = 30, group = G_D)
 string iDet = input.string("Simple", "Detail level", options = ["Simple", "Full"], group = G_D, tooltip = "Simple: D/T/E panel and plan + missing checks. Full: expanded panel and compact per-check/management tooltip. The verbose Full prose was condensed in 3.59 for TradingView's compiled-token limit; calculations, grades and alerts are unchanged.")
-string iView = input.string("Current (3.54)", "Chart view", options = ["Current (3.54)", "Clean", "MX Lite"], group = G_D, tooltip = "Current = 3.54 density. Clean/MX Lite = compact drawings. MX Lite defaults to latest setup only. Display only; logic unchanged.")
-bool iSigShow = input.bool(true, "Show setup labels", group = G_D, tooltip = "Display only. Off hides setup tags; logic, tracker and alerts continue.")
-bool iZoneShow = input.bool(true, "Show setup zones / iFVGs", group = G_D, tooltip = "Display only. Off hides trigger box/iFVG marker; logic unchanged.")
-bool iMxRecent = input.bool(true, "Latest setup only (MX Lite)", group = G_D, tooltip = "MX Lite only. Mutes older drawings; records/tracker kept.")
-bool cleanView = iView == "Clean"
-bool mxLiteView = iView == "MX Lite"
-bool compactView = cleanView or mxLiteView
 bool iPanel = input.bool(true, "Checklist panel", inline = "pn", group = G_D)
 bool iStageRow = input.bool(false, "Show setup state row (study)", group = G_D, tooltip = "Read-only in every view: shows a confirmed evaluated trigger on this bar, or PREV CLOSE for just the next bar, then the active sweep / preview / wait state. Known blockers only; no raw-gap detector. ELIGIBLE is alert eligibility, not delivery. Off draws no new row.")
 string iPos = input.string("Auto", "", options = ["Auto", "Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], inline = "pn", group = G_D, tooltip = "Auto puts the checklist at middle right on 1m–5m charts so it is nearer the live price row, and bottom right on slower charts. Choose a fixed position to restore the 3.56 bottom-right placement or avoid overlap with other indicators. Tables follow chart corners, not price bars.")
@@ -467,9 +439,6 @@ f_zf() =>
 [fu15, fe15, fub15, fut15, fet15, feb15, fk15, _] = request.security(pTk, "15", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
 [fu60, fe60, fub60, fut60, fet60, feb60, fk60, _] = request.security(pTk, "60", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
 [fu240, fe240, fub240, fut240, fet240, feb240, fk240, _] = request.security(pTk, "240", f_zf(), lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
-string ttTf = iTtSel == "Auto" ? (cm <= 1 ? "15" : cm <= 3 ? "30" : cm <= 5 ? "60" : "240") : iTtSel
-string ttNm = ttTf == "15" ? "15m" : ttTf == "30" ? "30m" : ttTf == "60" ? "1H" : "4H"
-int ttSec = timeframe.in_seconds(ttTf)
 // Original HTF candle-leg-open CISD: a run's first opposite candle sets the level;
 // a later close through that open confirms it. No sweep or lower-TF entry is inferred.
 // bull[1]/bear[1] are from the LAST CLOSED HTF candle. `time` marks turnover to
@@ -493,39 +462,6 @@ f_hcEvent() =>
     [bull[1], bear[1], time, time_close[1]]
 [hcB1, hcS1, hcT1, hcClose1] = request.security(syminfo.tickerid, hcTF1, f_hcEvent(), lookahead = barmerge.lookahead_on)
 [hcB2, hcS2, hcT2, hcClose2] = request.security(syminfo.tickerid, hcTF2, f_hcEvent(), lookahead = barmerge.lookahead_on)
-f_tt() =>
-    [open[1], high[1], low[1], close[1], open[2], high[2], low[2], close[2], time, open]
-[c2o, c2h, c2l, c2c, c1o, c1h, c1l, c1c, htT0, htO] = request.security(syminfo.tickerid, ttTf, f_tt(), lookahead = barmerge.lookahead_on)
-[pc2o, pc2c] = request.security(pTk, ttTf, [open[1], close[1]], lookahead = barmerge.lookahead_on, ignore_invalid_symbol = true)
-// T-Spot (TTrades): after a bullish C2 / C3 closure, the upper half of that HTF candle (high → 50%); bearish: lower half (low → 50%)
-// HTF candle closure against the previous candle: 2 / -2 = bullish / bearish C2 (swept the low / high and closed back inside),
-// 3 / -3 = bullish / bearish C3 (swept nothing, closed beyond the previous body), 0 = none. a sweep always decides first
-f_cl(float o, float h, float l, float c, float po, float ph, float pl, float pc) =>
-    bool bu2 = l < pl and c > pl
-    bool be2 = h > ph and c < ph
-    int r = 0
-    if bu2 and not be2
-        r := 2
-    else if be2 and not bu2
-        r := -2
-    else if bu2 and be2
-        // swept both sides: the side it closed away from wins
-        r := c > (ph + pl) / 2 ? 2 : -2
-    else if l >= pl and h <= ph
-        r := c > math.max(po, pc) ? 3 : c < math.min(po, pc) ? -3 : 0
-    else if l >= pl and c > math.max(po, pc)
-        r := 3
-    else if h <= ph and c < math.min(po, pc)
-        r := -3
-    r
-int clV = f_cl(c2o, c2h, c2l, c2c, c1o, c1h, c1l, c1c)
-int tsDir = clV > 0 ? 1 : clV < 0 ? -1 : 0
-float tsTop = tsDir == 1 ? c2h : tsDir == -1 ? (c2h + c2l) / 2 : na
-float tsBot = tsDir == 1 ? (c2h + c2l) / 2 : tsDir == -1 ? c2l : na
-f_tt3() =>
-    [open[3], high[3], low[3], close[3], open[4], high[4], low[4], close[4], time[1], time[2], time[3]]
-[c0o, c0h, c0l, c0c, cpo, cph, cpl, cpc, tq1, tq2, tq3] = request.security(syminfo.tickerid, ttTf, f_tt3(), lookahead = barmerge.lookahead_on)
-
 // a session list ("2000-0000,0200-0500") checked part by part, every day of the week: without explicit days a session string can skip
 // Sunday evening, which is Monday's Asia (the trading day starts at 18:00 New York)
 f_in(string ss) =>
@@ -603,15 +539,6 @@ var array<int> esBuB = array.new<int>()
 var array<int> esBeB = array.new<int>()
 var array<label> rjLb = array.new<label>()
 // T-Spot history: one box per HTF candle of the sequence, plus the wick dot
-var array<box> tsBx = array.new<box>()
-var array<label> tsDot = array.new<label>()
-var int tsCurDir = 0
-var float tsCurTop = na
-var float tsCurBot = na
-var float tsWk = na
-var int tsWkT = na
-var int tsSeq = 0
-var string tsTxt = ""
 var array<int> pv = array.new<int>()
 var array<int> hiSwB = array.new<int>()
 var array<int> loSwB = array.new<int>()
@@ -1124,9 +1051,6 @@ f_trk(Tr t) =>
     true
 
 // TTFM: does the last closed HTF candle show a C2 or C3 closure in this direction?
-f_ttOk(bool isL) =>
-    isL ? clV > 0 : clV < 0
-
 // delivery check: the sweep extreme inside a same-direction HTF gap (5m only when sponsored)
 f_deliv(int d, float ext) =>
     bool htf = false
@@ -1215,8 +1139,6 @@ f_preview(int d, Sw s) =>
             gN := 0
         if iHard and isR and not inAm
             gN := 0
-        if iTtF != "Off" and not f_ttOk(isL) and gN > 0
-            gN := iTtF == "Strict" ? 0 : gN - 1
     [esOk, esN] = f_esDel(d, s.pairX)
     int fsOut = trT == "CISD" ? 2 : trFs
     [gN, mdl, trig, trT, trH, trHt, cl, sl, risk, tp, tpN, fsOut, esOk, esN]
@@ -1388,19 +1310,9 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         bool smt = smtOn and not na(s.op) and not s.oTk and not na(s.pairX) and (isL ? s.pairX >= s.op : s.pairX <= s.op)
         // TTrades Fractal Model: the last closed HTF candle (C2) confirms the swing
         // C2 closure: swept the previous candle's low (high) and closed back inside · C3 closure: no sweep, closed beyond the body of the previous candle
-        bool c2Cl = clV == (isL ? 2 : -2)
-        bool c3Cl = clV == (isL ? 3 : -3)
-        bool ttOk = c2Cl or c3Cl
         // the entry wick (sweep extreme) formed inside the T-Spot of the HTF candle
-        bool tsOk = tsDir == d and not na(tsTop) and s.ext <= tsTop + 0.25 * atr and s.ext >= tsBot - 0.25 * atr
-        string ttTx = c2Cl ? ttNm + " C2 closure · swept " + f_prc(isL ? c1l : c1h) + ", closed back inside at " + f_prc(c2c) : c3Cl ? ttNm + " C3 closure · closed " + (isL ? "above" : "below") + " the body of the previous candle at " + f_prc(c2c) : "no " + ttNm + " C2 / C3 closure yet: TTFM says the CISD means nothing without it"
         // PSP: the same HTF candle closed a different colour on the pair
-        bool psp = smtOn and not na(pc2c) and not na(c2c) and (c2c > c2o) != (pc2c > pc2o)
-        bool smtP = smt or psp
-        // entry timing inside the current HTF candle (TTFM: enter early, near its open)
-        float ttEl = (time_close - htT0) / 60000.0
-        float ttLen = ttSec / 60.0
-        bool ttLate = ttEl > ttLen * 0.5
+        bool smtP = smt
         // time based exits: the next 15m / 30m / 1H closes
         int nx15 = int(math.ceil(time_close / 900000.0)) * 900000
         int nx30 = int(math.ceil(time_close / 1800000.0)) * 1800000
@@ -1443,8 +1355,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         if iSmtR and isR and smtOn and not smt and gN > 0
             gN := gN == 3 ? 1 : gN - 1
         // TTFM filter: no HTF C2 / C3 closure in this direction
-        if iTtF != "Off" and not ttOk and gN > 0
-            gN := iTtF == "Strict" ? 0 : gN == 3 ? 1 : gN - 1
         bool hcOk = false
         string hcWhich = ""
         if iHCOn
@@ -1452,7 +1362,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
                 if ev.d == d and ev.confirmedT <= time_close and time_close - ev.confirmedT <= iHCFresh * 60000
                     hcOk := true
                     hcWhich := f_zName(ev.tf) + " CISD" + (d == 1 ? "+" : "-") + " " + f_prc(ev.level)
-        int conf = (ttOk ? 1 : 0) + (cisd ? 1 : 0) + (div ? 1 : 0) + (smtP ? 1 : 0)
+        int conf = (cisd ? 1 : 0) + (div ? 1 : 0) + (smtP ? 1 : 0)
         float triggerPx = isL ? g.top : g.bot
         bool duplicate = f_isDuplicate(d, triggerPx, s.b0, mdl)
         if duplicate
@@ -1462,7 +1372,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
         bool show = slOk and gN >= minG and (okWin or iOut == "Dim") and not duplicate
         // Store only the most recent evaluated trigger on this bar; never alter the setup/alert gates.
         if iStageRow
-            string why = not slOk ? "STOP" : not (s.key or intSw) ? "SWEEP" : not bOk ? "BIAS" : hardB ? "NY RULEBOOK" : not delOk ? "NO HTF" : not (vsh or cd) ? "V-SHAPE" : not disp ? "DISPLACEMENT" : not dol ? "NO TARGET" : iTtF != "Off" and not ttOk ? "TTFM" : iSmtR and isR and smtOn and not smt ? "SMT" : duplicate ? "DUPLICATE" : not okWin ? (inNews ? "NEWS" : "WINDOW") : "BELOW " + iMinG
+            string why = not slOk ? "STOP" : not (s.key or intSw) ? "SWEEP" : not bOk ? "BIAS" : hardB ? "NY RULEBOOK" : not delOk ? "NO HTF" : not (vsh or cd) ? "V-SHAPE" : not disp ? "DISPLACEMENT" : not dol ? "NO TARGET" : iSmtR and isR and smtOn and not smt ? "SMT" : duplicate ? "DUPLICATE" : not okWin ? (inNews ? "NEWS" : "WINDOW") : "BELOW " + iMinG
             bool eligible = show and okWin and (not hardB or iAlBlockedB) and iAlConfirmed and f_alertAllowed()
             string noAlert = not okWin ? (inNews ? "NEWS" : "WINDOW") : hardB and not iAlBlockedB ? "RULEBOOK B" : not iAlOn ? "ALERTS OFF" : not iAlConfirmed ? "CONFIRMED OFF" : "ALERT WINDOW"
             ui.stageB := bar_index
@@ -1477,7 +1387,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             why += not vsh ? " V-SHAPE" : ""
             why += not bOk ? " BIAS" : ""
             why += hardB ? " NY-BLOCK" : ""
-            why += iTtF != "Off" and not ttOk ? " TTFM" : ""
             why += isR and iSmtR and smtOn and not smt ? " SMT" : ""
             why += duplicate ? " DUP" : ""
             why += not okWin ? " WINDOW" : ""
@@ -1512,12 +1421,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
                 miss2 += "\n✖ highest TF iFVG (" + pdTf + " gap still open)"
             if intTk
                 miss2 += "\n✖ internal liquidity already swept"
-            if not ttOk
-                miss2 += "\n✖ no " + ttNm + " C2 / C3 closure"
-            if not tsOk and ttOk
-                miss2 += "\n✖ wick outside the " + ttNm + " T-Spot"
-            if ttLate
-                miss2 += "\n✖ late in the " + ttNm + " candle (" + str.tostring(ttEl, "#") + " / " + str.tostring(ttLen, "#") + " min)"
             if isR and smtOn and not smt
                 miss2 += "\n✖ reversal without SMT"
             if rBad or scBad
@@ -1551,11 +1454,9 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
                 tip += "\n" + f_ck(dol) + "target" + (dol ? " · " + tpN : "")
                 tip += "\n" + f_ck(lrOk) + "LRL " + str.tostring(lrN) + "/" + str.tostring(lrNeed)
                 tip += "\n" + f_ck(not intTk) + "internal liq. untouched"
-                tip += "\n" + f_ck(ttOk) + ttTx
-                tip += "\n" + f_ck(tsOk) + "T-Spot " + (tsOk ? f_prc(tsBot) + "–" + f_prc(tsTop) : "missing/outside")
                 tip += "\n" + f_ck(cisd) + "CISD" + (na(cLvl) ? "" : " " + f_prc(cLvl))
                 tip += "\n" + f_ck(div) + "volume divergence"
-                tip += "\n" + f_ck(smtP) + "SMT/PSP" + (smtOn ? " " + pairRoot : " (off)")
+                tip += "\n" + f_ck(smtP) + "SMT" + (smtOn ? " " + pairRoot : " (off)")
                 if smtOn and iEsChk
                     [esOk, esN] = f_esDel(d, s.pairX)
                     int fs = cd ? 2 : f_fsmt(g.bull, g.b, g.tf)
@@ -1574,7 +1475,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             st.stopPx := sl
             st.dir := d
             st.madeB := bar_index
-            st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, iZoneShow ? 85 : 100))
+            st.bx := box.new(g.t0, g.top, time, g.bot, xloc = xloc.bar_time, border_color = color.new(c, 100), bgcolor = color.new(c, 85))
             // iFVG tag with hover info
             int gOff = math.min(bar_index - g.b, 989)
             float gMid = (g.top + g.bot) / 2
@@ -1588,10 +1489,10 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             gTip += "\n" + str.tostring(bar_index - s.extB) + " candles from the extreme (V-shape max " + str.tostring(iVMax) + ")"
             gTip += "\ntrigger body " + str.tostring(body, "#.##") + " pts · " + (disp ? "displacement ✔" : "no displacement ✖")
             gTip += cd ? "" : jud ? "\n\nhighest TF not required (Judas)" : "\n\n" + f_ck(hiOk) + "highest TF iFVG in the leg" + pdTxt
-            st.tl.push(label.new(g.t0, gMid, iZoneShow ? (cd ? "CISD" : g.tf + " iFVG") : "", xloc = xloc.bar_time, style = label.style_label_left, color = color.new(c, 100), textcolor = c, size = size.tiny, tooltip = iZoneShow ? gTip : "", text_font_family = font.family_monospace))
+            st.tl.push(label.new(g.t0, gMid, (cd ? "CISD" : g.tf + " iFVG"), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(c, 100), textcolor = c, size = size.tiny, tooltip = gTip, text_font_family = font.family_monospace))
             string lbTxt = (isL ? "▲ " : "▼ ") + gT + " " + str.tostring(conf) + "/4 " + mdl + (rBad or scBad ? "✖" : "") + (cd ? " CISD" : "") + (jud ? " J" : "") + (inNews ? " NEWS" : "")
             bool pill = iLbl == "Pills"
-            st.lb := label.new(bar_index, isL ? low : high, iSigShow ? lbTxt : "", xloc = xloc.bar_index, yloc = isL ? yloc.belowbar : yloc.abovebar, style = pill ? (isL ? label.style_label_up : label.style_label_down) : label.style_none, color = color.new(c, (not iSigShow or not pill) ? 100 : gN >= 2 ? 0 : 35), textcolor = color.new(pill ? f_on(c) : c, iSigShow ? 0 : 100), size = f_sz(), tooltip = iSigShow ? tip : "", text_font_family = font.family_monospace)
+            st.lb := label.new(bar_index, isL ? low : high, lbTxt, xloc = xloc.bar_index, yloc = isL ? yloc.belowbar : yloc.abovebar, style = pill ? (isL ? label.style_label_up : label.style_label_down) : label.style_none, color = color.new(c, not pill ? 100 : gN >= 2 ? 0 : 35), textcolor = color.new(pill ? f_on(c) : c, 0), size = f_sz(), tooltip = tip, text_font_family = font.family_monospace)
             // older setup: keep label and iFVG box, drop its trade lines
             if iTrade == "Last setup" and sts.size() > 0
                 St prv = sts.last()
@@ -1623,11 +1524,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
                 for i = 0 to lrN - 1
                     st.tc.push(label.new(lrB.get(i), lrP.get(i), "○", xloc = xloc.bar_index, yloc = yloc.price, style = isL ? label.style_label_down : label.style_label_up, color = color.new(c, 100), textcolor = color.new(c, 20), size = size.small, tooltip = "LRL touch " + str.tostring(i + 1) + " · " + f_prc(lrP.get(i))))
             // MX Lite keeps older records and tracker references, but prevents later outcome text from resurfacing hidden tags.
-            if mxLiteView and iMxRecent and sts.size() > 0
-                for oldTr in trs
-                    oldTr.tagVisible := false
-                for oldSt in sts
-                    f_stFade(oldSt, true)
             // auto outcome: a new setup flips any open opposite one (rule 10.7), then is tracked itself
             if iTrack and okWin
                 for t in trs
@@ -1645,7 +1541,7 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
                         ui.nTk += 1
                     Tr nt = Tr.new(d, en, sl, risk, pL, tp2, beP, slC, slE, bar_index, time, st.lb, lbTxt, tip)
                     nt.rule := allowed
-                    nt.tagVisible := iSigShow
+                    nt.tagVisible := true
                     trs.push(nt)
                     while trs.size() > 60
                         trs.shift()
@@ -1679,7 +1575,6 @@ f_setup(int d, Gp g, Sw s, Gp pd, bool cd = false) =>
             pv.push(disp ? 1 : 0)
             pv.push(htf ? 1 : 0)
             pv.push(dol ? 1 : 0)
-            pv.push(iTtF == "Off" ? 3 : ttOk ? 1 : 0)
             pv.push(cisd ? 1 : 0)
             pv.push(div ? 1 : 0)
             pv.push(smtOn ? (smtP ? 1 : 0) : 2)
@@ -1725,40 +1620,6 @@ if barstate.isconfirmed and calc
         ui.nTk := 0
         ui.nLoss := 0
     // T-Spot history: a new HTF candle opens → close the last one (wick dot), open a new box if there is a closure
-    if iTsDraw and not na(htT0) and htT0 != htT0[1]
-        if not compactView and tsCurDir != 0 and not na(tsWk)
-            bool hit = tsWk <= tsCurTop and tsWk >= tsCurBot
-            color dc0 = tsCurDir == 1 ? iLong : iShort
-            tsDot.push(label.new(tsWkT, tsWk, hit ? "●" : "○", xloc = xloc.bar_time, yloc = yloc.price, style = tsCurDir == 1 ? label.style_label_down : label.style_label_up, color = color.new(dc0, 100), textcolor = hit ? dc0 : cMu, size = size.small, tooltip = hit ? "the " + ttNm + " wick formed inside its T-Spot" : "the " + ttNm + " wick formed outside its T-Spot"))
-        bool wasC2 = math.abs(clV) == 2
-        // the candle that was meant to expand closed the other way: that sequence failed
-        if not compactView and tsCurDir != 0 and tsDir == -tsCurDir and tsBx.size() > 0
-            box fb = tsBx.last()
-            fb.set_text(tsTxt + " · failed")
-            fb.set_bgcolor(color.new(cNeu, 92))
-            fb.set_border_color(color.new(cNeu, 50))
-            fb.set_border_style(line.style_dotted)
-            fb.set_text_color(cMu)
-        tsSeq := tsDir == 0 ? 0 : wasC2 ? 3 : tsDir == tsCurDir and tsSeq > 0 ? tsSeq + 1 : 4
-        tsCurDir := tsDir
-        tsCurTop := tsTop
-        tsCurBot := tsBot
-        tsWk := na
-        tsWkT := na
-        if not compactView and tsDir != 0 and not na(tsTop)
-            color tsc0 = tsDir == 1 ? iLong : iShort
-            tsTxt := (tsDir == 1 ? "▲ C" : "▼ C") + str.tostring(tsSeq) + " T-Spot"
-            tsBx.push(box.new(htT0, tsTop, htT0 + ttSec * 1000, tsBot, xloc = xloc.bar_time, border_color = color.new(tsc0, 50), border_style = line.style_dashed, bgcolor = color.new(tsc0, 88), text = tsTxt, text_size = size.small, text_color = tsc0, text_halign = text.align_right, text_valign = tsDir == 1 ? text.align_top : text.align_bottom))
-            while tsBx.size() > iTsN
-                tsBx.shift().delete()
-            while tsDot.size() > iTsN
-                tsDot.shift().delete()
-    // the wick of the current HTF candle so far (its low when bullish, its high when bearish)
-    if tsCurDir != 0
-        float wv = tsCurDir == 1 ? low : high
-        if na(tsWk) or (tsCurDir == 1 ? wv < tsWk : wv > tsWk)
-            tsWk := wv
-            tsWkT := time
     // auto outcome: follow the open setups on this candle, before any new one
     if iTrack and trs.size() > 0
         for t in trs
@@ -2119,7 +1980,7 @@ f_left(string sess) =>
     int(math.max(0, (endT - nowT) / 60000))
 int minLeft = inAs ? f_left(sAs) : inLo ? f_left(sLo) : inAm ? f_left(sNyRule) : na
 color ribC = inNews ? color.new(cBad, 10) : inJudas ? color.new(#9C27B0, 35) : inMacro ? color.new(cWarn, 35) : inWin ? color.new(cOk, 75) : na
-plotshape(iRib and not compactView and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
+plotshape(iRib and not na(ribC), "Timing ribbon", shape.square, location.bottom, ribC, size = size.tiny, display = display.pane)
 var table mt = table.new(position.top_center, 2, 1, border_width = 2)
 var table diagTb = iDiag ? table.new(position.bottom_left, 1, 1) : na
 var array<line> pLn = array.new<line>()
@@ -2168,10 +2029,6 @@ if barstate.islast
                     if smtOn and iEsChk
                         ptip += "\n" + (pes ? "✔ " + pairRoot + " delivering from " + pesN : "✖ " + pairRoot + " not in an HTF FVG at its extreme")
                         ptip += pfs == 1 ? "\n✔ " + pairRoot + " printed the same gap" : pfs == 0 ? "\n✖ FVG SMT: " + pairRoot + " has no matching gap → low probability (rulebook: skip)" : ""
-                    bool aTt = f_ttOk(isL)
-                    float aEl = ((barstate.isrealtime ? timenow : time_close) - htT0) / 60000.0
-                    ptip += "\n" + (aTt ? "✔ " : "✖ ") + ttNm + " C2 / C3 closure " + (aTt ? "in this direction" : "missing" + (iTtF == "Grade" ? " (one grade lower)" : iTtF == "Strict" ? " (not shown in Strict)" : ""))
-                    ptip += "\n" + (aEl <= ttSec / 120.0 ? "✔ " : "✖ ") + "timing · " + str.tostring(aEl, "#") + " / " + str.tostring(ttSec / 60, "#") + " min into the " + ttNm + " candle"
                     ptip += "\n\ngrade if it closes with displacement: " + pgT + (na(secs) ? "" : "\ncandle closes in " + str.tostring(secs) + " s")
                     ptip += "\nprepare: size, stop and target ready. enter only on the close."
                     pLn.push(line.new(sv.extB, ptr, bar_index + 8, ptr, color = color.new(pc, form ? 0 : 40), style = line.style_dashed, width = form ? 2 : 1))
@@ -2211,7 +2068,7 @@ if barstate.islast
     if iLvShow and lvs.size() > 0
         array<int> used = array.new<int>()
         array<float> dPx = array.new<float>()
-        int otherLimit = compactView ? 1 : iLvN
+        int otherLimit = iLvN
         for side = 0 to 1
             int otherDrawn = 0
             int tries = 0
@@ -2255,100 +2112,8 @@ if barstate.islast
                         dPx.push(v.px)
                         if not corePass
                             otherDrawn += 1
-    if iTtLines and not compactView and not na(htO)
-        string tsz = iTtSz == "Tiny" ? size.tiny : iTtSz == "Normal" ? size.normal : size.small
-        dLn.push(line.new(bar_index - 15, htO, bar_index + 10, htO, color = color.new(lc, 10)))
-        dLb.push(label.new(bar_index + 10, htO, ttNm + " OPEN", style = label.style_label_left, color = color.new(lc, 100), textcolor = lc, size = tsz, text_font_family = font.family_monospace))
     // HTF candles on the right (TTrades view): 3 closed + the one forming, at real prices, tagged C2 → C3 → C4
-    if iTtView and not compactView and not na(c2o) and not na(htT0)
-        float fh = high
-        float fl = low
-        int kk = 0
-        while kk < 480 and time[kk] >= htT0
-            fh := math.max(fh, high[kk])
-            fl := math.min(fl, low[kk])
-            kk += 1
-        // index 0 = the candle before the first one shown (only used to read its high / low), 1..3 closed, 4 forming
-        array<float> qo = array.from(cpo, c0o, c1o, c2o, htO)
-        array<float> qh = array.from(cph, c0h, c1h, c2h, fh)
-        array<float> ql = array.from(cpl, c0l, c1l, c2l, fl)
-        array<float> qc = array.from(cpc, c0c, c1c, c2c, close)
-        array<int> qt = array.from(int(na), tq3, tq2, tq1, htT0)
-        string tSz = iTtSz == "Tiny" ? size.tiny : iTtSz == "Normal" ? size.normal : size.small
-        color cBu = f_adj(iTtBull)
-        color cBe = f_adj(iTtBear)
-        color cWk = f_adj(iTtWick)
-        // an odd width keeps the wick exactly on the body's middle bar: the body spans bars xl .. xl + w - 1, the wick sits on xl + (w - 1) / 2
-        bool autoStrip = iTtLayout == "Auto (compact)"
-        int w = autoStrip ? (cm <= 5 ? 5 : 3) : iTtW % 2 == 0 ? iTtW + 1 : iTtW
-        int hw = int((w - 1) / 2)
-        int step = w + (autoStrip ? (cm <= 5 ? 3 : 2) : iTtGap)
-        int x0 = bar_index + (autoStrip ? (cm <= 1 ? 24 : cm <= 5 ? 18 : 12) : iTtX)
-        // closure type of each closed candle against the one before it
-        array<string> ty = array.new<string>(5, "")
-        for k = 1 to 3
-            float po = qo.get(k - 1)
-            float ph = qh.get(k - 1)
-            float pl = ql.get(k - 1)
-            float pc = qc.get(k - 1)
-            float o = qo.get(k)
-            float h = qh.get(k)
-            float l = ql.get(k)
-            float c = qc.get(k)
-            if not na(po) and not na(o)
-                int cv = f_cl(o, h, l, c, po, ph, pl, pc)
-                ty.set(k, cv == 2 ? "C2+" : cv == -2 ? "C2-" : cv == 3 ? "C3+" : cv == -3 ? "C3-" : "")
-        // sequence: the latest C2 closure, then C3, C4 after it; else the latest C3 closure, then C4
-        array<string> tg = array.new<string>(5, "")
-        int j2 = -1
-        for k = 1 to 3
-            if str.startswith(ty.get(k), "C2")
-                j2 := k
-        if j2 > 0
-            for k = j2 to 4
-                tg.set(k, "C" + str.tostring(2 + k - j2))
-        else if str.startswith(ty.get(3), "C3")
-            tg.set(3, "C3")
-            tg.set(4, "C4")
-        float top = math.max(qh.get(1), qh.get(2), qh.get(3), fh)
-        float bot = math.min(ql.get(1), ql.get(2), ql.get(3), fl)
-        float pad = (top - bot) * 0.03
-        int kMax = iTtForm ? 4 : 3
-        for k = 1 to kMax
-            float o = qo.get(k)
-            float h = qh.get(k)
-            float l = ql.get(k)
-            float c = qc.get(k)
-            if not na(o) and not na(c)
-                int xl = x0 + (k - 1) * step
-                int xc = xl + hw
-                bool fm = k == 4
-                color bc = c >= o ? cBu : cBe
-                dLn.push(line.new(xc, h, xc, l, color = color.new(cWk, fm ? 40 : 0), width = 2))
-                dBx.push(box.new(xl, math.max(o, c), xl + w - 1, math.min(o, c), border_color = color.new(cWk, fm ? 40 : 0), bgcolor = color.new(bc, fm ? 55 : 0)))
-                string tx = ""
-                if iTtTime
-                    tx := fm ? str.tostring(math.max(0, (htT0 + ttSec * 1000 - (barstate.isrealtime ? timenow : time_close)) / 60000), "#") + "m left" : str.format_time(qt.get(k), "HH:mm", NY)
-                if iTtTag and tg.get(k) != ""
-                    tx += (tx == "" ? "" : "\n") + tg.get(k)
-                if iTtPspT and k == 3 and smtOn and not na(pc2c) and (c2c > c2o) != (pc2c > pc2o)
-                    tx += (tx == "" ? "" : " · ") + "PSP"
-                if tx != ""
-                    dLb.push(label.new(xc, bot - pad, tx, style = label.style_label_up, color = color.new(cTx, 100), textcolor = tg.get(k) != "" ? cTx : cMu, size = tSz, text_font_family = font.family_monospace))
-        // the level the C2 swept (the previous candle's high / low)
-        if iTtSwp and j2 > 0
-            bool bu = ty.get(j2) == "C2+"
-            float sw = bu ? ql.get(j2 - 1) : qh.get(j2 - 1)
-            int xa = j2 - 1 >= 1 ? x0 + (j2 - 2) * step : x0 - 2
-            dLn.push(line.new(xa, sw, x0 + (j2 - 1) * step + w - 1, sw, color = bu ? iLong : iShort, width = 2))
-        // EQ of the last closed candle, carried over the forming one
-        if iTtEq
-            float eqv = (qh.get(3) + ql.get(3)) / 2
-            int xe = x0 + 2 * step
-            dLn.push(line.new(xe, eqv, xe + step + w - 1, eqv, color = cTx, style = line.style_dashed, width = 1))
-            dLb.push(label.new(xe + step + w, eqv, "EQ", style = label.style_label_left, color = color.new(cTx, 100), textcolor = cTx, size = tSz, text_font_family = font.family_monospace))
-        dLb.push(label.new(x0 + step, top + pad, ttNm + " candles", style = label.style_label_down, color = color.new(cTx, 100), textcolor = cTx, size = tSz, text_font_family = font.family_monospace))
-    if iNwog and not compactView and not na(nwT) and not na(nwT0) and iNwSt != "Hidden"
+    if iNwog and not na(nwT) and not na(nwT0) and iNwSt != "Hidden"
         float nwC = (nwT + nwB) / 2
         if iNwSt == "Full box"
             int xE = time + 15 * cs * 1000
@@ -2370,12 +2135,12 @@ if barstate.islast
             for pass = 0 to 1
                 for i = 0 to zs.size() - 1
                     Zn z = zs.get(i)
-                    if nIn < (compactView ? 1 : 2) and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
+                    if nIn < 2 and z.breached == (pass == 0) and (iZ5Show or z.tf != "5m") and z.top >= close and z.bot <= close
                         zUsed.push(i)
                         nIn += 1
         // then the nearest ones above and below
         for side = 0 to 1
-            for pass = 1 to (compactView ? 1 : iZN)
+            for pass = 1 to iZN
                 int best = -1
                 float bd = na
                 for i = 0 to zs.size() - 1
@@ -2456,7 +2221,6 @@ if barstate.islast and iMap
                 st0 += 86400000
             nxW := na(nxW) ? st0 : math.min(nxW, st0)
     // the last closed HTF candle's closure direction (TTFM)
-    int htD = tsDir
     // delivery zone in the bias direction: price inside it, or the nearest one ahead
     Zn dz = na
     bool inZ = false
@@ -2508,8 +2272,6 @@ if barstate.islast and iMap
     else if sug != "No trade" and iBias != sug
         sTx := "CHECK BIAS · yours is " + iBias + ", the map says " + sug + " · recheck your IF/THEN"
         sBg := cWarn
-    else if htD == -dd
-        sTx := "WAIT · " + (dL ? "longs" : "shorts") + " only, but the last " + ttNm + " candle closed " + (htD == 1 ? "bullish" : "bearish") + " (C2 / C3) · let the " + ttNm + " resolve"
         sBg := cWarn
     else if ui.lastB >= 0 and bar_index - ui.lastB <= 3 and ui.lastL == dL
         sTx := ui.lastG + (dL ? " LONG" : " SHORT") + " CONFIRMED · run your checklist · max 2 trades today"
@@ -2564,7 +2326,7 @@ if barstate.islast and iPanel and iStageRow
 // A table is screen-anchored; the auto corner follows chart TF, not the viewport's empty right margin.
 panelPosition = iPos == "Top Right" ? position.top_right : iPos == "Top Left" ? position.top_left : iPos == "Middle Right" or (iPos == "Auto" and cm <= 5) ? position.middle_right : iPos == "Bottom Left" ? position.bottom_left : position.bottom_right
 var table tb = table.new(position.bottom_right, 2, 21, border_width = 0)
-if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
+if barstate.islast and iPanel and iDet == "Simple"
     tb.clear(0, 0, 1, 20)
     tb.set_position(panelPosition)
     tb.set_bgcolor(cPan)
@@ -2588,7 +2350,7 @@ if barstate.islast and iPanel and (iDet == "Simple" or cleanView)
     if iStageRow
         tb.cell(0, 7, "NOW", text_color = cTx, text_size = pSz, text_halign = text.align_left)
         tb.cell(1, 7, stageText, text_color = stageColor, text_size = pSz, text_halign = text.align_right, tooltip = "Now = current close, else PREV CLOSE (1 bar), else live wait/preview. ELIGIBLE is not alert delivery.")
-if barstate.islast and iPanel and iDet == "Full" and not cleanView
+if barstate.islast and iPanel and iDet == "Full"
     tb.set_position(panelPosition)
     color tx = cTx
     color mu = cMu
@@ -2596,7 +2358,7 @@ if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.set_frame_color(cFrm)
     tb.set_frame_width(1)
     color hc = str.startswith(ui.dir, "LONG") ? iLong : str.startswith(ui.dir, "SHORT") ? iShort : cNeu
-    array<string> nm = array.from("V-shape", "Displacement", "HTF delivery", "Draw on liquidity", ttNm + " closure (TTFM)", "CISD", "Volume divergence", "SMT / PSP")
+    array<string> nm = array.from("V-shape", "Displacement", "HTF delivery", "Draw on liquidity", "CISD", "Volume divergence", "SMT")
     tb.cell(0, 0, "SNM+ " + ui.dir, text_color = f_on(hc), bgcolor = hc, text_size = hSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 0, ui.grade, text_color = f_on(hc), bgcolor = hc, text_size = hSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     tb.cell(0, 1, "LAST SETUP", text_color = mu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
@@ -2607,7 +2369,7 @@ if barstate.islast and iPanel and iDet == "Full" and not cleanView
     tb.cell(1, 3, ui.swept, text_color = tx, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
     tb.cell(0, 4, "iFVG", text_color = tx, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)
     tb.cell(1, 4, pv.size() > 0 ? ui.fv + (ui.fvOk ? " ✔" : " ✖") : "–", text_color = pv.size() > 0 and not ui.fvOk ? cBad : cOk, text_size = pSz, text_halign = text.align_right, text_font_family = font.family_monospace)
-    for r = 0 to 7
+    for r = 0 to 6
         int v = r < pv.size() ? pv.get(r) : 2
         int row = r < 4 ? 5 + r : 10 + (r - 4)
         tb.cell(0, row, nm.get(r), text_color = r < 4 ? tx : mu, text_size = pSz, text_halign = text.align_left, text_font_family = font.family_monospace)

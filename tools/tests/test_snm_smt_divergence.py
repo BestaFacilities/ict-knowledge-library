@@ -46,14 +46,14 @@ def main():
     old = parse(old_source)
     new = parse(new_source)
 
-    assert 'indicator("SNM+ 3.67", shorttitle = "SNM+ 3.67"' in new_source
+    assert 'indicator("SNM+ 3.68", shorttitle = "SNM+ 3.68"' in new_source
 
     # The opt-in input exists and defaults Off (display-only, opt-in).
     assert 'bool iSmtDiv = input.bool(false, "Show SMT divergence markers"' in new_source
     assert 'group = G_C' in new_source
 
-    # Non-display logic is untouched: f_setup and the setup gate are identical.
-    assert dump(function(old, "f_setup")) == dump(function(new, "f_setup")), "f_setup changed"
+    # The setup gate is identical (TTrades removal changed f_setup body but not the gate).
+    # f_setup body comparison is covered by the noninterference regression.
     old_gate = next(node for node in setup_body(old) if head(node).startswith("bool show ="))
     new_gate = next(node for node in setup_body(new) if head(node).startswith("bool show ="))
     assert dump(old_gate) == dump(new_gate), "setup grade/window/dedup gate changed"

@@ -1,4 +1,4 @@
-// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.67).
+// NOT PINE CODE — planning note for tools/snm-plus.pine (active source: SNM+ 3.68).
 
 # Prioritized ManipulationX V9 → SNM+ roadmap
 
