@@ -1,6 +1,6 @@
 //@version=6
-// SNM+ 3.66 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
-// 3.66 fixes the 3.65 compile errors (rv/ro declaration order) and CW10026 inline-input titles; 3.65 clarifies the checklist panel (LAST SETUP vs NOW, explicit n/a states).
+// SNM+ 3.67 — André Wonou; 3.47 baseline plus optional CISD Model+ integration
+// 3.67 adds opt-in SMT divergence markers (display-only); 3.66 fixes the 3.65 compile errors and CW10026 inline-input titles.
 // Simple by design: it draws setups, it does not trade. ManipulationX core (liquidity sweep + iFVG + V-shape),
 // intraday swings and equal highs / lows (EQH / EQL) as sweep levels and draws. Judas tag (J) at the NY open.
 // iFVG on 1m / 2m / 3m / 5m: the highest timeframe inversion in the leg is preferred. each iFVG box is tagged, hover for its details.
@@ -23,7 +23,7 @@
 // stop drawn at the sweep extreme by default, whatever the distance; the other stop options are listed in the tooltip.
 // graded with the DTE rulebook (HTF delivery, V-shape, displacement, draw on liquidity, bias, premarket + macro for A++),
 // with CISD, volume divergence and SMT shown as confluence. Outcome tracking and two-per-day counting are optional (off by default); the checklist decides.
-indicator("SNM+ 3.66", shorttitle = "SNM+ 3.66", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
+indicator("SNM+ 3.67", shorttitle = "SNM+ 3.67", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 300, max_bars_back = 1000)
 
 const string NY = "America/New_York"
 const string G_S = "Setup"
@@ -116,6 +116,7 @@ bool iZIn = input.bool(true, "Also the gaps price is trading inside", group = G_
 bool iZ5Show = input.bool(false, "Draw 5M gaps too", group = G_C, tooltip = "5M gaps are always used as draws and (when sponsored) as delivery; drawing them adds clutter")
 string iMsTf = input.timeframe("15", "Structure timeframe (C / R)", group = G_C, tooltip = "with the structure = C (continuation), against = R (reversal). structure turns bullish on a close above the last swing high, bearish on a close below the last swing low (pivots 2/2)")
 bool iSmtOn = input.bool(true, "SMT with ES / NQ", group = G_C)
+bool iSmtDiv = input.bool(false, "Show SMT divergence markers", group = G_C, tooltip = "Display-only: marks swing points where the chart makes a new high/low but the SMT pair does not (SMT- bearish / SMT+ bullish divergence). Informational only; does not affect setups, grades, targets, or alerts. Requires SMT with ES / NQ on and a valid pair feed.")
 string iPairMode = input.string("Auto", "SMT sibling", options = ["Auto", "Manual"], group = G_C, tooltip = "Auto keeps SNM+ 3.47's NQ/ES and MNQ/MES pairing. Manual permits another symbol; if the feed has no data, SMT/ES checks will be unavailable, not silently treated as confirmed.")
 string iManualPair = input.symbol("CME_MINI:ES1!", "Manual SMT symbol", group = G_C, tooltip = "Only used when SMT sibling = Manual. For gold, choose the exact correlated feed available on your TradingView account; an invalid feed cannot validate SMT.")
 string iTtSel = input.string("Auto", "Fractal pairing (HTF candle)", options = ["Auto", "15", "30", "60", "240"], group = G_C, tooltip = "TTrades Fractal Model: the higher timeframe candle your entry chart trades inside. Auto: 1m → 15m, 3m → 30m, 5m → 1H, 15m → 4H. used for the C2 / C3 closure check, PSP, entry timing and time exits")
@@ -633,6 +634,10 @@ var array<float> qL = array.new<float>(4, na)
 var array<bool> sWas = array.new<bool>(4, false)
 var int lastPhB = -1
 var int lastPlB = -1
+var float prevPhH = na
+var float prevPhP = na
+var float prevPlL = na
+var float prevPlP = na
 
 // ───────── helpers
 f_sz() =>
@@ -1784,6 +1789,11 @@ if barstate.isconfirmed and calc
         lastPhB := bar_index - 5
         if iSw
             f_addSw(ph5, true, bar_index - 5, oH[5])
+        if smtOn and not na(oH[5])
+            if iSmtDiv and not na(prevPhH) and not na(prevPhP) and ph5 > prevPhH and oH[5] < prevPhP
+                label.new(bar_index - 5, ph5, "SMT-", style = label.style_label_up, color = color.new(iShort, 0), textcolor = color.white, size = size.tiny, tooltip = "SMT bearish divergence: chart made a higher high but " + pairRoot + " made a lower high. Informational only.")
+            prevPhH := ph5
+            prevPhP := oH[5]
     // a failure swing taken by more than the equal tolerance is no longer liquidity
     if lrHp.size() > 0
         for i = lrHp.size() - 1 to 0
@@ -1811,6 +1821,11 @@ if barstate.isconfirmed and calc
         lastPlB := bar_index - 5
         if iSw
             f_addSw(pl5, false, bar_index - 5, oL[5])
+        if smtOn and not na(oL[5])
+            if iSmtDiv and not na(prevPlL) and not na(prevPlP) and pl5 < prevPlL and oL[5] > prevPlP
+                label.new(bar_index - 5, pl5, "SMT+", style = label.style_label_down, color = color.new(iLong, 0), textcolor = color.white, size = size.tiny, tooltip = "SMT bullish divergence: chart made a lower low but " + pairRoot + " made a higher low. Informational only.")
+            prevPlL := pl5
+            prevPlP := oL[5]
 
     // Completed session highs/lows enter the common active-liquidity registry.
     // NY is one continuous 09:30–16:00 range; NY AM rulebook timing stays separate.
